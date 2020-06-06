@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{File, read};
 use std::path::Path;
 use std::io::{Read, Write, BufReader, BufRead, SeekFrom, Error, Seek};
 use serde::{Serialize, Deserialize};
@@ -7,7 +7,7 @@ use std::fs::OpenOptions;
 use std::io;
 
 
-struct Segment {
+pub struct Segment {
     fd: File,
     size: usize,
 }
@@ -28,16 +28,25 @@ impl Segment {
         };
     }
 
+    pub fn with_file(f: File) -> Segment {
+        return Segment {
+            fd: f,
+            size: 0,
+        };
+    }
 
-    fn write(&mut self, key: String, value: String) -> Result<(), Box<dyn std::error::Error>> {
+
+    fn write(&mut self, key: String, value: String) -> Result<u64, Box<dyn std::error::Error>> {
         let kv = KVPair {
             key,
             value,
         };
+        let current_offset = self.tell()?;
+
         serde_json::to_writer(&self.fd, &kv)?;
         self.fd.write(b"\n")?;
         self.size += 1;
-        Ok(())
+        return Ok(current_offset);
     }
 
 
@@ -46,24 +55,25 @@ impl Segment {
         Ok(())
     }
 
+    fn read_line(&self) -> Result<Option<KVPair>, Box<dyn std::error::Error>> {
+        let maybe_pair = self.read_all(false)?.take(1).last();
+        Ok(maybe_pair)
+    }
 
-    fn peek(&self) -> Result<KVPair, Box<dyn std::error::Error>> {
-        let mut reader = BufReader::new(&self.fd);
+
+    fn peek(&self) -> Result<Option<KVPair>, Box<dyn std::error::Error>> {
         let current = self.tell()?;
-        let mut s = String::new();
-        reader.read_line(&mut s)?;
-        let kv_pair = serde_json::from_str::<KVPair>(&s)?;
-
+        let maybe_entry = self.read_line()?;
         //reset back to current offset
         self.seek(current)?;
-        return Ok(kv_pair);
+        Ok(maybe_entry)
     }
 
 
     fn search(&self, key: &str) -> Result<Option<String>, std::io::Error> {
         let current_pos = self.tell()?;
         let result = self.
-            read_all().
+            read_all(true).
             map(|mut stream| stream.find(|kv| &kv.key == key)).
             map(|kv| kv.map(|found| found.value));
         self.seek(current_pos)?;
@@ -83,8 +93,10 @@ impl Segment {
     }
 
 
-    fn read_all(&self) -> Result<impl Iterator<Item=KVPair> + '_, std::io::Error> {
-        self.reset()?;
+    fn read_all(&self, from_start: bool) -> Result<impl Iterator<Item=KVPair> + '_, std::io::Error> {
+        if from_start {
+            self.reset()?;
+        }
         let reader = BufReader::new(&self.fd);
         return Ok(reader.lines().
             map(|x| serde_json::from_str::<KVPair>(&x.unwrap()).unwrap()));
@@ -99,19 +111,20 @@ mod tests {
     use crate::sst::{KVPair, Segment};
     use std::fs;
 
+    extern crate tempfile;
+
 
     #[test]
     fn test_search() {
-        let mut sst = Segment::new("foobar.txt");
+        let mut sst = Segment::with_file(tempfile::tempfile().unwrap());
         assert_eq!(true, sst.write("foo".to_owned(), "bar".to_owned()).is_ok());
         assert_eq!(true, sst.write("hello".to_owned(), "world".to_owned()).is_ok());
         assert_eq!(Some("world".to_owned()), sst.search("hello").unwrap());
-        fs::remove_file("foobar.txt").unwrap();
     }
 
     #[test]
-    fn test_peak() {
-        let mut sst = Segment::new("foobar.txt");
+    fn test_peek() {
+        let mut sst = Segment::with_file(tempfile::tempfile().unwrap());
         sst.write("k1".to_owned(), "v1".to_owned());
         sst.reset();
         let x = sst.peek();
@@ -119,5 +132,34 @@ mod tests {
         assert_eq!(x.is_ok(), true);
         assert_eq!(y.is_ok(), true);
         assert_eq!(x.unwrap(), y.unwrap());
+    }
+
+    #[test]
+    fn test_readline() {
+        let mut sst = Segment::with_file(tempfile::tempfile().unwrap());
+        sst.write("k1".to_owned(), "v1".to_owned());
+        sst.write("k2".to_owned(), "v2".to_owned());
+
+
+        sst.reset();
+        let first = sst.read_line();
+        let second = sst.read_line();
+        dbg!(second);
+    }
+
+    #[test]
+    fn test_seek() {
+        let mut sst = Segment::with_file(tempfile::tempfile().unwrap());
+        let first_offset = sst.write("k1".to_owned(), "v1".to_owned()).unwrap();
+        let second_offset = sst.write("k2".to_owned(), "v2".to_owned()).unwrap();
+
+        sst.write("k3".to_owned(), "v3".to_owned());
+        sst.seek(first_offset);
+        let first = sst.read_all(false).unwrap().take(1).last();
+        assert_eq!(Some("v1".to_owned()), first.map(|x| x.value));
+
+        sst.seek(second_offset);
+        let first = sst.read_all(false).unwrap().take(1).last();
+        assert_eq!(Some("v2".to_owned()), first.map(|x| x.value));
     }
 }
