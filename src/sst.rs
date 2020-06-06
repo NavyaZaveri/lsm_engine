@@ -13,7 +13,7 @@ struct Segment {
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 struct KVPair {
     key: String,
     value: String,
@@ -51,11 +51,11 @@ impl Segment {
         let mut reader = BufReader::new(&self.fd);
         let current = self.tell()?;
         let mut s = String::new();
-        reader.read_line(&mut s);
+        reader.read_line(&mut s)?;
         let kv_pair = serde_json::from_str::<KVPair>(&s)?;
 
         //reset back to current offset
-        self.seek(current);
+        self.seek(current)?;
         return Ok(kv_pair);
     }
 
@@ -107,5 +107,17 @@ mod tests {
         assert_eq!(true, sst.write("hello".to_owned(), "world".to_owned()).is_ok());
         assert_eq!(Some("world".to_owned()), sst.search("hello").unwrap());
         fs::remove_file("foobar.txt").unwrap();
+    }
+
+    #[test]
+    fn test_peak() {
+        let mut sst = Segment::new("foobar.txt");
+        sst.write("k1".to_owned(), "v1".to_owned());
+        sst.reset();
+        let x = sst.peek();
+        let y = sst.peek();
+        assert_eq!(x.is_ok(), true);
+        assert_eq!(y.is_ok(), true);
+        assert_eq!(x.unwrap(), y.unwrap());
     }
 }
