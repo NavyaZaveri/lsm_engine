@@ -30,6 +30,10 @@ impl<K: PartialOrd + Hash + Ord, T> Memtable<K, T> {
         self.kv_table.insert(key, Present(value));
     }
 
+    pub fn contains<Q: ?Sized>(&self, key: &Q) -> bool where K: Borrow<Q>, Q: Ord, {
+        return self.kv_table.contains_key(key);
+    }
+
 
     pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&ValueStatus<T>> where K: Borrow<Q>, Q: Ord, {
         self.kv_table.get(key)
