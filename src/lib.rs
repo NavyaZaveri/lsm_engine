@@ -1,5 +1,6 @@
 use crate::memtable::{Memtable, ValueStatus};
 use std::collections::{HashSet, HashMap};
+use crate::sst::Segment;
 
 
 mod memtable;
@@ -9,6 +10,7 @@ mod sst;
 struct LSMEngine {
     memtable: Memtable<String, String>,
     inmemory_capacity: usize,
+    segments: Vec<Segment>,
 }
 
 
@@ -21,6 +23,7 @@ impl LSMEngine {
             ValueStatus::Tombstone => { None }
         }
     }
+
     pub fn delete(&mut self, key: &str) {}
 }
 

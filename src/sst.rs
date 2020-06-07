@@ -1,10 +1,9 @@
 use std::fs::{File, read};
-use std::path::Path;
+
 use std::io::{Read, Write, BufReader, BufRead, SeekFrom, Error, Seek};
 use serde::{Serialize, Deserialize};
 use std::cell::RefCell;
 use std::fs::OpenOptions;
-use std::io;
 
 
 pub struct Segment {
@@ -14,7 +13,7 @@ pub struct Segment {
 
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
-struct KVPair {
+pub struct KVPair {
     key: String,
     value: String,
 }
@@ -36,13 +35,12 @@ impl Segment {
     }
 
 
-    fn write(&mut self, key: String, value: String) -> Result<u64, Box<dyn std::error::Error>> {
+    pub fn write(&mut self, key: String, value: String) -> Result<u64, Box<dyn std::error::Error>> {
         let kv = KVPair {
             key,
             value,
         };
         let current_offset = self.tell()?;
-
         serde_json::to_writer(&self.fd, &kv)?;
         self.fd.write(b"\n")?;
         self.size += 1;
@@ -50,14 +48,14 @@ impl Segment {
     }
 
 
-    fn seek(&self, pos: u64) -> Result<(), std::io::Error> {
+    pub fn seek(&self, pos: u64) -> Result<(), std::io::Error> {
         RefCell::new(&self.fd).borrow_mut().seek(SeekFrom::Start(pos))?;
         Ok(())
     }
 
-    fn peek(&self) -> Result<Option<KVPair>, Box<dyn std::error::Error>> {
+    pub fn peek(&self) -> Result<Option<KVPair>, Box<dyn std::error::Error>> {
         let current = self.tell()?;
-        let maybe_entry = self.read(false)?.take(1).last();
+        let maybe_entry = self.read().take(1).last();
 
         //reset back to current offset
         self.seek(current)?;
@@ -65,18 +63,19 @@ impl Segment {
     }
 
 
-    fn search(&self, key: &str) -> Result<Option<String>, std::io::Error> {
+    pub fn search(&self, key: &str) -> Result<Option<String>, std::io::Error> {
         let current_pos = self.tell()?;
         let result = self.
-            read(true).
-            map(|mut stream| stream.find(|kv| &kv.key == key)).
+            read_from_start().
+            map(|mut iterator| iterator.find(|kv| &kv.key == key)).
             map(|kv| kv.map(|found| found.value));
+
         self.seek(current_pos)?;
         return result;
     }
 
 
-    fn tell(&self) -> Result<u64, std::io::Error> {
+    pub fn tell(&self) -> Result<u64, std::io::Error> {
         let offset = RefCell::new(&self.fd).borrow_mut().seek(SeekFrom::Current(0))?;
         Ok(offset)
     }
@@ -88,75 +87,79 @@ impl Segment {
     }
 
 
-    fn read(&self, from_start: bool) -> Result<impl Iterator<Item=KVPair> + '_, std::io::Error> {
-        if from_start {
-            self.reset()?;
-        }
+    pub fn read(&self) -> impl Iterator<Item=KVPair> + '_ {
         let reader = BufReader::new(&self.fd);
-        return Ok(reader.lines().
-            map(|x| serde_json::from_str::<KVPair>(&x.unwrap()).unwrap()));
+        return reader.lines().
+            map(|string| serde_json::from_str::<KVPair>(&string.unwrap()).unwrap());
+    }
+
+
+    pub fn read_from_start(&self) -> Result<impl Iterator<Item=KVPair> + '_, std::io::Error> {
+        self.reset()?;
+        return Ok(self.read());
     }
 }
 
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::io::{Write, Seek, Read, SeekFrom};
-    use crate::sst::{KVPair, Segment};
-    use std::fs;
+    use std::io::{Write, Seek, Read};
+    use crate::sst::Segment;
 
     extern crate tempfile;
 
 
     #[test]
-    fn test_search() {
-        let mut sst = Segment::with_file(tempfile::tempfile().unwrap());
-        assert_eq!(true, sst.write("foo".to_owned(), "bar".to_owned()).is_ok());
-        assert_eq!(true, sst.write("hello".to_owned(), "world".to_owned()).is_ok());
-        assert_eq!(Some("world".to_owned()), sst.search("hello").unwrap());
+    fn test_search() -> Result<(), Box<dyn std::error::Error>> {
+        let mut sst = Segment::with_file(tempfile::tempfile()?);
+        sst.write("foo".to_owned(), "bar".to_owned())?;
+        sst.write("hello".to_owned(), "world".to_owned())?;
+        assert_eq!(Some("world".to_owned()), sst.search("hello")?);
+        Ok(())
     }
 
     #[test]
-    fn test_peek() {
-        let mut sst = Segment::with_file(tempfile::tempfile().unwrap());
-        sst.write("k1".to_owned(), "v1".to_owned()).unwrap();
-        sst.reset().unwrap();
-        let x = sst.peek();
-        let y = sst.peek();
-        assert_eq!(x.is_ok(), true);
-        assert_eq!(y.is_ok(), true);
-        assert_eq!(x.unwrap(), y.unwrap());
+    fn test_peek() -> Result<(), Box<dyn std::error::Error>> {
+        let mut sst = Segment::with_file(tempfile::tempfile()?);
+        sst.write("k1".to_owned(), "v1".to_owned())?;
+        sst.reset()?;
+        let x = sst.peek()?;
+        let y = sst.peek()?;
+        assert_eq!(x, y);
+        Ok(())
     }
 
 
     #[test]
-    fn test_seek() {
-        let mut sst = Segment::with_file(tempfile::tempfile().unwrap());
-        let first_offset = sst.write("k1".to_owned(), "v1".to_owned()).unwrap();
-        let second_offset = sst.write("k2".to_owned(), "v2".to_owned()).unwrap();
-        sst.write("k3".to_owned(), "v3".to_owned());
+    fn test_seek() -> Result<(), Box<dyn std::error::Error>> {
+        let mut sst = Segment::with_file(tempfile::tempfile()?);
+        let first_offset = sst.write("k1".to_owned(), "v1".to_owned())?;
+        let second_offset = sst.write("k2".to_owned(), "v2".to_owned())?;
+        sst.write("k3".to_owned(), "v3".to_owned())?;
 
-        sst.seek(first_offset);
-        let first = sst.read(false).unwrap().take(1).last();
+        sst.seek(first_offset)?;
+        let first = sst.read().take(1).last();
         assert_eq!(Some("v1".to_owned()), first.map(|x| x.value));
 
-        sst.seek(second_offset);
-        let first = sst.read(false).unwrap().take(1).last();
+        sst.seek(second_offset)?;
+        let first = sst.read().take(1).last();
         assert_eq!(Some("v2".to_owned()), first.map(|x| x.value));
+        Ok(())
     }
 
     #[test]
-    fn test_read() {
-        let mut sst = Segment::with_file(tempfile::tempfile().unwrap());
-        sst.write("k1".to_owned(), "v1".to_owned());
-        sst.write("k2".to_owned(), "v2".to_owned());
-        let iterator = &mut sst.read(true).unwrap();
+    fn test_read() -> Result<(), Box<dyn std::error::Error>> {
+        let mut sst = Segment::with_file(tempfile::tempfile()?);
+        sst.write("k1".to_owned(), "v1".to_owned())?;
+        sst.write("k2".to_owned(), "v2".to_owned())?;
+        let iterator = &mut sst.read_from_start()?;
 
-        let first = iterator.take(1).last();
-        assert_eq!(first.unwrap().value, "v1".to_owned());
+        let first = iterator.next();
+        assert_eq!(Some("v1".to_owned()), first.map(|kv| kv.value));
 
-        let second = iterator.take(2).last();
-        assert_eq!(second.unwrap().value, "v2".to_owned());
+        let second = iterator.next();
+        assert_eq!(Some("v2".to_owned()), second.map(|kv| kv.value));
+
+        Ok(())
     }
 }
