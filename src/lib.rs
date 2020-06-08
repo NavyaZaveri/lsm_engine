@@ -1,6 +1,8 @@
 use crate::memtable::{Memtable, ValueStatus};
 use std::collections::{HashSet, HashMap};
-use crate::sst::{Segment, SST_Error};
+use crate::sst::{Segment, SstError};
+use std::rc::Rc;
+use thiserror::Error;
 
 #[macro_use]
 extern crate lazy_static;
@@ -14,17 +16,25 @@ lazy_static! {
     static ref TOMBSTONE_VALUE:&'static str= "TOMBSTONE";
 }
 
-pub struct LSMEngine<'a> {
-    memtable: Memtable<String, String>,
-    segments: Vec<Segment>,
-    persist_data: bool,
-    sparse_memory_index: HashMap<u64, &'a Segment>,
+#[derive(Error, Debug)]
+pub enum ERROR {
+    #[error(transparent)]
+    SstError(#[from] sst::SstError)
+}
 
+type Result<T> = std::result::Result<T, crate::ERROR>;
+
+
+pub struct LSMEngine {
+    memtable: Memtable<String, String>,
+    segments: Vec<Rc<Segment>>,
+    persist_data: bool,
+    sparse_memory_index: HashMap<u64, Rc<Segment>>,
 }
 
 
-impl<'a> LSMEngine<'a> {
-    fn new(inmemory_capacity: usize, persist_data: bool) -> Self {
+impl LSMEngine {
+    pub fn new(inmemory_capacity: usize, persist_data: bool) -> Self {
         return LSMEngine {
             memtable: Memtable::new(inmemory_capacity),
             segments: Vec::new(),
@@ -34,7 +44,7 @@ impl<'a> LSMEngine<'a> {
     }
 
 
-    fn flush_memtable(&mut self) -> Result<Segment, SST_Error> {
+    fn flush_memtable(&mut self) -> Result<Segment> {
         let mut new_segment = if self.persist_data { Segment::default() } else { Segment::temp() };
         for (k, value_status) in self.memtable.drain() {
             match value_status {
@@ -48,10 +58,11 @@ impl<'a> LSMEngine<'a> {
         };
         return Ok(new_segment);
     }
-    pub fn write(&mut self, key: String, value: String) -> Result<(), SST_Error> {
+
+    pub fn write(&mut self, key: String, value: String) -> Result<()> {
         if self.memtable.at_capacity() && !self.memtable.contains(&key) {
             let new_segment = self.flush_memtable()?;
-            self.segments.push(new_segment);
+            self.segments.push(Rc::new(new_segment));
             self.memtable.insert(key, value);
         } else {
             self.memtable.insert(key, value);
@@ -60,7 +71,7 @@ impl<'a> LSMEngine<'a> {
     }
 
 
-    pub fn read<'b>(&'b mut self, key: &str) -> Result<Option<String>, sst::SST_Error> {
+    pub fn read(&mut self, key: &str) -> Result<Option<String>> {
         if let Some(value_status) = self.memtable.get(key) {
             return match value_status {
                 ValueStatus::Present(value) => { Ok(Some(value.to_owned())) }
@@ -68,11 +79,13 @@ impl<'a> LSMEngine<'a> {
             };
         }
 
-
+        //go through all segments in reverse order since the newest segments are inserted last
         for seg in self.segments.iter().rev() {
             //replace with call to sparse memory index
             let value = seg.search_from_start(key)?;
-            if value.is_some() && value.as_ref().unwrap() != &TOMBSTONE_VALUE.to_string() {
+
+            //make sure it's not the tombstone value
+            if value.as_ref().map_or(false, |v| v != &TOMBSTONE_VALUE.to_string()) {
                 return Ok(value);
             }
         }
@@ -83,13 +96,15 @@ impl<'a> LSMEngine<'a> {
     }
 }
 
+fn main() {}
+
 
 #[cfg(test)]
 mod tests {
     use crate::LSMEngine;
 
     #[test]
-    fn it_works() -> Result<(), Box<dyn std::error::Error>> {
+    fn it_works() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut lsm = LSMEngine::new(2, false);
         lsm.write("k1".to_owned(), "v1".to_owned())?;
         lsm.write("k2".to_owned(), "v2".to_owned())?;

@@ -1,21 +1,21 @@
 use std::fs::{File, read};
 
-use std::io::{Read, Write, BufReader, BufRead, SeekFrom, Error, Seek};
+use std::io::{Read, Write, BufReader, BufRead, SeekFrom, Seek};
 use serde::{Serialize, Deserialize};
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::time::SystemTime;
 use std::collections::BinaryHeap;
-use std::{fmt, io};
+use std::io;
 #[macro_use]
 use thiserror::Error;
 
 
-type Result<T> = std::result::Result<T, SST_Error>;
+type Result<T> = std::result::Result<T, SstError>;
 
 #[derive(Error, Debug)]
-pub enum SST_Error {
-    #[error("Attempted to write {} but previous entry is {}", current, previous)]
+pub enum SstError {
+    #[error("Attempted to write {} but previous key is {}", current, previous)]
     UNSORTED_WRTE { previous: String, current: String },
 
     #[error(transparent)]
@@ -71,8 +71,10 @@ impl Segment {
 
 
     pub fn write(&mut self, key: String, value: String) -> Result<u64> {
+
+        //check if the previously written entry is bigger than the current key
         if self.previous_key.as_ref().map_or(false, |prev| prev > &key) {
-            return Err(SST_Error::UNSORTED_WRTE { previous: self.previous_key.as_ref().unwrap().to_string(), current: key.clone() });
+            return Err(SstError::UNSORTED_WRTE { previous: self.previous_key.as_ref().unwrap().to_string(), current: key });
         }
         self.previous_key = Some(key.clone());
 
@@ -145,7 +147,7 @@ impl Segment {
     pub fn read(&self) -> impl Iterator<Item=KVPair> + '_ {
         let reader = BufReader::new(&self.fd);
         return reader.lines().
-            map(|string| serde_json::from_str::<KVPair>(&string.expect("the segment file should not be tampered with")).expect("something went deserializing the contents of the segment file"));
+            map(|string| serde_json::from_str::<KVPair>(&string.expect("the segment file should not be tampered with")).expect("something went wrong deserializing the contents of the segment file"));
     }
 
 
