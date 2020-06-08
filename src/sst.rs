@@ -5,19 +5,30 @@ use serde::{Serialize, Deserialize};
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::time::SystemTime;
+use std::collections::BinaryHeap;
+use std::{fmt, io};
+#[macro_use]
+use thiserror::Error;
 
+
+type Result<T> = std::result::Result<T, SST_Error>;
+
+#[derive(Error, Debug)]
+pub enum SST_Error {
+    #[error("Attempted to write {} but previous entry is {}", current, previous)]
+    UNSORTED_WRTE { previous: String, current: String },
+
+    #[error(transparent)]
+    Disconnect(#[from] io::Error),
+
+    #[error(transparent)]
+    JSON_PARSING(#[from] serde_json::error::Error),
+}
 
 pub struct Segment {
     fd: File,
     size: usize,
-}
-
-
-pub fn merge_segments(segments: Vec<Segment>, max_size: usize) -> Result<Vec<Segment>, Box<dyn std::error::Error>> {
-    let mut iterators = segments.iter().map(|s| s.read_from_start()).collect::<Result<Vec<_>, _>>()?;
-
-
-    unimplemented!()
+    previous_key: Option<String>,
 }
 
 
@@ -33,6 +44,7 @@ impl Segment {
         return Segment {
             fd: OpenOptions::new().read(true).write(true).create(true).open(path).unwrap(),
             size: 0,
+            previous_key: None,
         };
     }
 
@@ -53,16 +65,20 @@ impl Segment {
         return Segment {
             fd: f,
             size: 0,
+            previous_key: None,
         };
     }
 
 
-    pub fn write(&mut self, key: String, value: String) -> Result<u64, Box<dyn std::error::Error>> {
-        let kv = KVPair {
-            key,
-            value,
-        };
+    pub fn write(&mut self, key: String, value: String) -> Result<u64> {
+        if self.previous_key.as_ref().map_or(false, |prev| prev > &key) {
+            return Err(SST_Error::UNSORTED_WRTE { previous: self.previous_key.as_ref().unwrap().to_string(), current: key.clone() });
+        }
+
+        let kv = KVPair { key, value };
+
         let current_offset = self.tell()?;
+
         serde_json::to_writer(&self.fd, &kv)?;
         self.fd.write(b"\n")?;
         self.size += 1;
@@ -70,7 +86,7 @@ impl Segment {
     }
 
 
-    pub fn at(&self, pos: u64) -> Result<Option<String>, std::io::Error> {
+    pub fn at(&self, pos: u64) -> Result<Option<String>> {
         let current = self.tell()?;
         self.seek(pos)?;
         let value = self.read().take(1).last().map(|kv| kv.value);
@@ -78,23 +94,22 @@ impl Segment {
         Ok(value)
     }
 
-    fn seek(&self, pos: u64) -> Result<(), std::io::Error> {
+    fn seek(&self, pos: u64) -> Result<()> {
         RefCell::new(&self.fd).borrow_mut().seek(SeekFrom::Start(pos))?;
         Ok(())
     }
 
 
-    pub fn peek(&self) -> Result<Option<KVPair>, Box<dyn std::error::Error>> {
+    fn peek(&self) -> Result<Option<KVPair>> {
         let current = self.tell()?;
         let maybe_entry = self.read().take(1).last();
 
-        //reset back to current offset
         self.seek(current)?;
         Ok(maybe_entry)
     }
 
 
-    pub fn search_from(&self, key: &str, offset: u64) -> Result<Option<String>, std::io::Error> {
+    pub fn search_from(&self, key: &str, offset: u64) -> Result<Option<String>> {
         let current_pos = self.tell()?;
         self.seek(offset)?;
         let maybe_value = self.
@@ -109,18 +124,18 @@ impl Segment {
     }
 
 
-    pub fn search_from_start(&self, key: &str) -> Result<Option<String>, std::io::Error> {
+    pub fn search_from_start(&self, key: &str) -> Result<Option<String>> {
         return self.search_from(key, 0);
     }
 
 
-    pub fn tell(&self) -> Result<u64, std::io::Error> {
+    fn tell(&self) -> Result<u64> {
         let offset = RefCell::new(&self.fd).borrow_mut().seek(SeekFrom::Current(0))?;
         Ok(offset)
     }
 
 
-    fn reset(&self) -> Result<(), std::io::Error> {
+    fn reset(&self) -> Result<()> {
         self.seek(0)?;
         Ok(())
     }
@@ -129,11 +144,11 @@ impl Segment {
     pub fn read(&self) -> impl Iterator<Item=KVPair> + '_ {
         let reader = BufReader::new(&self.fd);
         return reader.lines().
-            map(|string| serde_json::from_str::<KVPair>(&string.unwrap()).unwrap());
+            map(|string| serde_json::from_str::<KVPair>(&string.expect("the segment file should not be tampered with")).expect("something went deserializing the contents of the segment file"));
     }
 
 
-    pub fn read_from_start(&self) -> Result<impl Iterator<Item=KVPair> + '_, std::io::Error> {
+    pub fn read_from_start(&self) -> Result<impl Iterator<Item=KVPair> + '_> {
         self.reset()?;
         return Ok(self.read());
     }
@@ -143,7 +158,7 @@ impl Segment {
 #[cfg(test)]
 mod tests {
     use std::io::{Write, Seek, Read};
-    use crate::sst::{Segment, merge_segments};
+    use crate::sst::Segment;
 
     extern crate tempfile;
 
