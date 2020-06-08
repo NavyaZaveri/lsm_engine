@@ -9,6 +9,7 @@ extern crate lazy_static;
 mod memtable;
 mod sst;
 
+
 lazy_static! {
     static ref TOMBSTONE_VALUE:&'static str= "TOMBSTONE";
 }
@@ -66,6 +67,7 @@ impl<'a> LSMEngine<'a> {
                 ValueStatus::Tombstone => { Ok(None) }
             };
         }
+
 
         for seg in self.segments.iter().rev() {
             //replace with call to sparse memory index

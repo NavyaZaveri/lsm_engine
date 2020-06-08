@@ -74,6 +74,7 @@ impl Segment {
         if self.previous_key.as_ref().map_or(false, |prev| prev > &key) {
             return Err(SST_Error::UNSORTED_WRTE { previous: self.previous_key.as_ref().unwrap().to_string(), current: key.clone() });
         }
+        self.previous_key = Some(key.clone());
 
         let kv = KVPair { key, value };
 
@@ -241,7 +242,6 @@ mod tests {
 
     #[test]
     fn test_search_range() -> Result<(), Box<dyn std::error::Error>> {
-        let x = tempfile::NamedTempFile::new().unwrap();
         let mut sst = Segment::with_file(tempfile::tempfile()?);
         let offset_1 = sst.write("k1".to_owned(), "v1".to_owned())?;
         let offset_2 = sst.write("k2".to_owned(), "v2".to_owned())?;
@@ -252,5 +252,13 @@ mod tests {
         }
         assert!(sst.search_from("k1", offset_2)?.is_none());
         Ok(())
+    }
+
+    #[test]
+    fn test_unsorted_writes() {
+        let mut sst = Segment::with_file(tempfile::tempfile().unwrap());
+        sst.write("k2".to_owned(), "v2".to_owned()).unwrap();
+        let result = sst.write("k1".to_owned(), "v1".to_owned());
+        assert!(result.is_err())
     }
 }
