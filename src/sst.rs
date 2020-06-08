@@ -4,6 +4,7 @@ use std::io::{Read, Write, BufReader, BufRead, SeekFrom, Error, Seek};
 use serde::{Serialize, Deserialize};
 use std::cell::RefCell;
 use std::fs::OpenOptions;
+use std::time::SystemTime;
 
 
 pub struct Segment {
@@ -28,11 +29,23 @@ pub struct KVPair {
 
 
 impl Segment {
-    pub fn new(path: &'static str) -> Segment {
+    pub fn new(path: &str) -> Segment {
         return Segment {
             fd: OpenOptions::new().read(true).write(true).create(true).open(path).unwrap(),
             size: 0,
         };
+    }
+
+    pub fn temp() -> Segment {
+        let temp = tempfile::tempfile().unwrap();
+        return Segment::with_file(temp);
+    }
+
+
+    pub fn default() -> Segment {
+        let now = SystemTime::now();
+        let s = format!("{:?}", now);
+        return Segment::new(&s);
     }
 
 
@@ -212,7 +225,8 @@ mod tests {
     }
 
     #[test]
-    fn test_search_range()  -> Result<(), Box<dyn std::error::Error>>{
+    fn test_search_range() -> Result<(), Box<dyn std::error::Error>> {
+        let x = tempfile::NamedTempFile::new().unwrap();
         let mut sst = Segment::with_file(tempfile::tempfile()?);
         let offset_1 = sst.write("k1".to_owned(), "v1".to_owned())?;
         let offset_2 = sst.write("k2".to_owned(), "v2".to_owned())?;
