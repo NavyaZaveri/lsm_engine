@@ -13,6 +13,7 @@ use thiserror::Error;
 
 type Result<T> = std::result::Result<T, SstError>;
 
+
 #[derive(Error, Debug)]
 pub enum SstError {
     #[error("Attempted to write {} but previous key is {}", current, previous)]
@@ -31,6 +32,14 @@ pub struct Segment {
     previous_key: Option<String>,
 }
 
+pub fn merge<'a>(segments: impl Iterator<Item=&'a Segment>) -> Result<Vec<Segment>> {
+    let mut iterators = segments.into_iter().map(|s| s.read_from_start()).collect::<Result<Vec<_>>>()?;
+    iterators[0].next();
+    iterators[1].next();
+
+    Ok(vec![])
+}
+
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct KVPair {
@@ -47,6 +56,7 @@ impl Segment {
             previous_key: None,
         };
     }
+
 
     pub fn temp() -> Segment {
         let temp = tempfile::tempfile().unwrap();
@@ -72,7 +82,7 @@ impl Segment {
 
     pub fn write(&mut self, key: String, value: String) -> Result<u64> {
 
-        //check if the previously written entry is bigger than the current key
+        //check if the previously written key is bigger than the current key
         if self.previous_key.as_ref().map_or(false, |prev| prev > &key) {
             return Err(SstError::UNSORTED_WRTE { previous: self.previous_key.as_ref().unwrap().to_string(), current: key });
         }

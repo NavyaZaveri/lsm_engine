@@ -3,6 +3,8 @@ use std::collections::{HashSet, HashMap};
 use crate::sst::{Segment, SstError};
 use std::rc::Rc;
 use thiserror::Error;
+use std::borrow::Borrow;
+use std::ops::Deref;
 
 #[macro_use]
 extern crate lazy_static;
@@ -16,13 +18,14 @@ lazy_static! {
     static ref TOMBSTONE_VALUE:&'static str= "TOMBSTONE";
 }
 
+
 #[derive(Error, Debug)]
-pub enum ERROR {
+pub enum Error {
     #[error(transparent)]
     SstError(#[from] sst::SstError)
 }
 
-type Result<T> = std::result::Result<T, crate::ERROR>;
+type Result<T> = std::result::Result<T, self::Error>;
 
 
 pub struct LSMEngine {
@@ -59,6 +62,17 @@ impl LSMEngine {
         return Ok(new_segment);
     }
 
+
+    fn merge_segments(&mut self) -> Result<()> {
+        self.segments = sst::merge(self.segments
+            .iter()
+            .map(Rc::deref))?
+            .into_iter()
+            .map(Rc::new)
+            .collect();
+        Ok(())
+    }
+
     pub fn write(&mut self, key: String, value: String) -> Result<()> {
         if self.memtable.at_capacity() && !self.memtable.contains(&key) {
             let new_segment = self.flush_memtable()?;
@@ -82,11 +96,11 @@ impl LSMEngine {
         //go through all segments in reverse order since the newest segments are inserted last
         for seg in self.segments.iter().rev() {
             //replace with call to sparse memory index
-            let value = seg.search_from_start(key)?;
+            let maybe_value = seg.search_from_start(key)?;
 
             //make sure it's not the tombstone value
-            if value.as_ref().map_or(false, |v| v != &TOMBSTONE_VALUE.to_string()) {
-                return Ok(value);
+            if maybe_value.as_ref().map_or(false, |v| v != &TOMBSTONE_VALUE.to_string()) {
+                return Ok(maybe_value);
             }
         }
         return Ok(None);
