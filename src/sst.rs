@@ -70,7 +70,7 @@ impl<I: Iterator<Item=KVPair>> Eq for MetaKey<I> {}
 
 struct SstMerger<I: Iterator<Item=KVPair>> {
     heap: BinaryHeap<MetaKey<I>, MinComparator>,
-    segment_iterators: Vec<Peekable<I>>,
+    segment_iterators: Vec<Peekable<Box<dyn Iterator<Item=KVPair>>>>,
 }
 
 impl<I: Iterator<Item=KVPair>> Iterator for SstMerger<I> {
@@ -96,7 +96,7 @@ pub fn merge<'a>(segments: impl Iterator<Item=&'a Segment>) -> Result<Vec<Segmen
         into_iter()
         .map(Segment::read_from_start).
 
-        map(|maybe_it| maybe_it.map(|it| Rc::new(RefCell::new((it).peekable()))))
+        map(|maybe_it| maybe_it.map(|it| Rc::new(RefCell::new((Box::new(it) as Box<dyn Iterator<Item=KVPair>>).peekable()))))
         .collect::<Result<Vec<_>>>()?;
 
     let mut heap = BinaryHeap::<MetaKey<_>, MinComparator>::new_min();
