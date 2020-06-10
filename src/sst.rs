@@ -1,13 +1,12 @@
-use std::fs::{File, read};
+use std::fs::{read, File};
 
-use std::io::{Read, Write, BufReader, BufRead, SeekFrom, Seek};
-use serde::{Serialize, Deserialize};
-use std::cell::{RefCell, Ref};
-use std::fs::OpenOptions;
-use std::time::SystemTime;
-use std::time::Instant;
 use binary_heap_plus::*;
-
+use serde::{Deserialize, Serialize};
+use std::cell::{Ref, RefCell};
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::time::Instant;
+use std::time::SystemTime;
 
 use std::io;
 #[macro_use]
@@ -17,9 +16,8 @@ use std::cmp::Ordering;
 use std::iter::Peekable;
 use std::rc::Rc;
 
-
 type Result<T> = std::result::Result<T, SstError>;
-
+type SegmentIterator<I: Iterator<Item = KVPair>> = Rc<RefCell<Peekable<I>>>;
 
 #[derive(Error, Debug)]
 pub enum SstError {
@@ -40,78 +38,108 @@ pub struct Segment {
     created_at: Instant,
 }
 
-struct MetaKey<I: Iterator<Item=KVPair>> {
+struct MetaKey<I: Iterator<Item = KVPair>> {
     key: String,
     value: String,
     timestamp: i32,
     segment_iterator: Rc<RefCell<Peekable<I>>>,
 }
 
-impl<I: Iterator<Item=KVPair>> Ord for MetaKey<I> {
+impl<I: Iterator<Item = KVPair>> Ord for MetaKey<I> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.key.cmp(&other.key).then(self.timestamp.cmp(&other.timestamp))
+        self.key
+            .cmp(&other.key)
+            .then(self.timestamp.cmp(&other.timestamp))
     }
 }
 
-impl<I: Iterator<Item=KVPair>> PartialEq for MetaKey<I> {
+impl<I: Iterator<Item = KVPair>> PartialEq for MetaKey<I> {
     fn eq(&self, other: &Self) -> bool {
         unimplemented!()
     }
 }
 
-impl<I: Iterator<Item=KVPair>> PartialOrd for MetaKey<I> {
+impl<I: Iterator<Item = KVPair>> PartialOrd for MetaKey<I> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         unimplemented!()
     }
 }
 
-impl<I: Iterator<Item=KVPair>> Eq for MetaKey<I> {}
+impl<I: Iterator<Item = KVPair>> Eq for MetaKey<I> {}
 
-
-struct SstMerger<I: Iterator<Item=KVPair>> {
+struct SstMerger<I: Iterator<Item = KVPair>> {
     heap: BinaryHeap<MetaKey<I>, MinComparator>,
-    segment_iterators: Vec<Peekable<Box<dyn Iterator<Item=KVPair>>>>,
+    segment_iterators: Vec<SegmentIterator<I>>,
 }
 
-impl<I: Iterator<Item=KVPair>> Iterator for SstMerger<I> {
+impl<I: Iterator<Item = KVPair>> SstMerger<I> {
+    fn new(
+        mut heap: BinaryHeap<MetaKey<I>, MinComparator>,
+        mut segment_iterators: Vec<SegmentIterator<I>>,
+    ) -> Self {
+        for it in &mut segment_iterators {
+            if it.borrow_mut().peek().is_some() {
+                let kv = it.borrow_mut().next().unwrap();
+                let meta_key = MetaKey {
+                    key: kv.key,
+                    value: kv.value,
+                    timestamp: 0,
+                    segment_iterator: it.clone(),
+                };
+                heap.push(meta_key);
+            }
+        }
+        return Self {
+            heap,
+            segment_iterators,
+        };
+    }
+}
+
+impl<I: Iterator<Item = KVPair>> Iterator for SstMerger<I> {
     type Item = KVPair;
 
     fn next(&mut self) -> Option<Self::Item> {
         while !self.heap.is_empty() {
-            let mut x = self.heap.pop().unwrap();
+            let x = self.heap.pop().unwrap();
             if x.segment_iterator.borrow_mut().peek().is_some() {
                 let next = x.segment_iterator.borrow_mut().next().unwrap();
-                self.heap.push(MetaKey { key: next.key, value: next.value, timestamp: x.timestamp, segment_iterator: x.segment_iterator });
+                self.heap.push(MetaKey {
+                    key: next.key,
+                    value: next.value,
+                    timestamp: x.timestamp,
+                    segment_iterator: x.segment_iterator,
+                });
+                return Some(KVPair {
+                    key: x.key,
+                    value: x.value,
+                });
             }
-
-            return Some(KVPair { key: x.key, value: x.value });
+            return Some(KVPair {
+                key: x.key,
+                value: x.value,
+            });
         }
         None
     }
 }
 
-
-pub fn merge<'a>(segments: impl Iterator<Item=&'a Segment>) -> Result<Vec<Segment>> {
-    let mut iterators = segments.
-        into_iter()
-        .map(Segment::read_from_start).
-
-        map(|maybe_it| maybe_it.map(|it| Rc::new(RefCell::new((Box::new(it) as Box<dyn Iterator<Item=KVPair>>).peekable()))))
+pub fn merge<'a>(segments: impl Iterator<Item = &'a Segment>) -> Result<Vec<Segment>> {
+    let iterators = segments
+        .into_iter()
+        .map(Segment::read_from_start)
+        .map(|maybe_it| maybe_it.map(|it| Rc::new(RefCell::new(it.peekable()))))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut heap = BinaryHeap::<MetaKey<_>, MinComparator>::new_min();
-    //init the heap
-    for mut it in &mut iterators {
-        if it.borrow_mut().peek().is_some() {
-            let kv = it.borrow_mut().next().unwrap();
-            let meta_key = MetaKey { key: kv.key, value: kv.value, timestamp: 0, segment_iterator: it.clone() };
-            heap.push(meta_key);
-        }
+    let heap = BinaryHeap::<MetaKey<_>, MinComparator>::new_min();
+    let merger = SstMerger::new(heap, iterators);
+    
+    for x in merger.into_iter() {
+        dbg!(x);
     }
 
     Ok(vec![])
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct KVPair {
@@ -119,30 +147,31 @@ pub struct KVPair {
     value: String,
 }
 
-
 impl Segment {
     pub fn new(path: &str) -> Segment {
         return Segment {
-            fd: OpenOptions::new().read(true).write(true).create(true).open(path).unwrap(),
+            fd: OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(path)
+                .unwrap(),
             size: 0,
             previous_key: None,
             created_at: Instant::now(),
         };
     }
 
-
     pub fn temp() -> Segment {
         let temp = tempfile::tempfile().unwrap();
         return Segment::with_file(temp);
     }
-
 
     pub fn default() -> Segment {
         let now = SystemTime::now();
         let s = format!("{:?}", now);
         return Segment::new(&s);
     }
-
 
     pub fn with_file(f: File) -> Segment {
         return Segment {
@@ -153,17 +182,21 @@ impl Segment {
         };
     }
 
-
     fn validate(&self, key: &str) -> Result<()> {
-        if self.previous_key.as_ref().map_or(false, |prev| prev.as_str() > key) {
-            return Err(SstError::UnsortedWrite { previous: self.previous_key.as_ref().unwrap().to_string(), current: key.to_owned() });
+        if self
+            .previous_key
+            .as_ref()
+            .map_or(false, |prev| prev.as_str() > key)
+        {
+            return Err(SstError::UnsortedWrite {
+                previous: self.previous_key.as_ref().unwrap().to_string(),
+                current: key.to_owned(),
+            });
         }
         Ok(())
     }
 
-
     pub fn write(&mut self, key: String, value: String) -> Result<u64> {
-
         //check if the previously written key is bigger than the current key
         self.validate(&key)?;
 
@@ -179,7 +212,6 @@ impl Segment {
         return Ok(current_offset);
     }
 
-
     pub fn at(&self, pos: u64) -> Result<Option<String>> {
         let current = self.tell()?;
         self.seek(pos)?;
@@ -189,10 +221,11 @@ impl Segment {
     }
 
     fn seek(&self, pos: u64) -> Result<()> {
-        RefCell::new(&self.fd).borrow_mut().seek(SeekFrom::Start(pos))?;
+        RefCell::new(&self.fd)
+            .borrow_mut()
+            .seek(SeekFrom::Start(pos))?;
         Ok(())
     }
-
 
     fn peek(&self) -> Result<Option<KVPair>> {
         let current = self.tell()?;
@@ -202,60 +235,57 @@ impl Segment {
         Ok(maybe_entry)
     }
 
-
     pub fn search_from(&self, key: &str, offset: u64) -> Result<Option<String>> {
         let current_pos = self.tell()?;
         self.seek(offset)?;
-        let maybe_value = self.
-            read().
-            find(|x| x.key.as_str() >= key).
-            filter(|x| x.key == key).
-            map(|kv| kv.value);
-
+        let maybe_value = self
+            .read()
+            .find(|x| x.key.as_str() >= key)
+            .filter(|x| x.key == key)
+            .map(|kv| kv.value);
 
         self.seek(current_pos)?;
         return Ok(maybe_value);
     }
 
-
     pub fn search_from_start(&self, key: &str) -> Result<Option<String>> {
         return self.search_from(key, 0);
     }
 
-
     fn tell(&self) -> Result<u64> {
-        let offset = RefCell::new(&self.fd).borrow_mut().seek(SeekFrom::Current(0))?;
+        let offset = RefCell::new(&self.fd)
+            .borrow_mut()
+            .seek(SeekFrom::Current(0))?;
         Ok(offset)
     }
-
 
     fn reset(&self) -> Result<()> {
         self.seek(0)?;
         Ok(())
     }
 
-
-    pub fn read(&self) -> impl Iterator<Item=KVPair> + '_ {
+    pub fn read(&self) -> impl Iterator<Item = KVPair> + '_ {
         let reader = BufReader::new(&self.fd);
-        return reader.lines().
-            map(|string| serde_json::from_str::<KVPair>(&string.expect("the segment file should not be tampered with")).expect("something went wrong deserializing the contents of the segment file"));
+        return reader.lines().map(|string| {
+            serde_json::from_str::<KVPair>(
+                &string.expect("the segment file should not be tampered with"),
+            )
+            .expect("something went wrong deserializing the contents of the segment file")
+        });
     }
 
-
-    pub fn read_from_start(&self) -> Result<impl Iterator<Item=KVPair> + '_> {
+    pub fn read_from_start(&self) -> Result<impl Iterator<Item = KVPair> + '_> {
         self.reset()?;
         return Ok(self.read());
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use std::io::{Write, Seek, Read};
-    use crate::sst::{Segment, merge};
+    use crate::sst::{merge, Segment};
+    use std::io::{Read, Seek, Write};
 
     extern crate tempfile;
-
 
     #[test]
     fn test_search() -> Result<(), Box<dyn std::error::Error>> {
@@ -277,14 +307,12 @@ mod tests {
         Ok(())
     }
 
-
     #[test]
     fn test_seek() -> Result<(), Box<dyn std::error::Error>> {
         let mut sst = Segment::with_file(tempfile::tempfile()?);
         let first_offset = sst.write("k1".to_owned(), "v1".to_owned())?;
         let second_offset = sst.write("k2".to_owned(), "v2".to_owned())?;
         sst.write("k3".to_owned(), "v3".to_owned())?;
-
 
         sst.seek(first_offset)?;
         let first = sst.read().take(1).last();
