@@ -3,7 +3,6 @@ use std::collections::{HashSet, HashMap};
 use crate::sst::{Segment, SstError};
 use std::rc::Rc;
 use thiserror::Error;
-use std::borrow::Borrow;
 use std::ops::Deref;
 
 #[macro_use]

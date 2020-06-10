@@ -5,10 +5,16 @@ use serde::{Serialize, Deserialize};
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::time::SystemTime;
-use std::collections::BinaryHeap;
+use std::time::Instant;
+use binary_heap_plus::*;
+
+
 use std::io;
 #[macro_use]
 use thiserror::Error;
+use std::borrow::Borrow;
+use std::cmp::Ordering;
+use std::iter::Peekable;
 
 
 type Result<T> = std::result::Result<T, SstError>;
@@ -17,7 +23,7 @@ type Result<T> = std::result::Result<T, SstError>;
 #[derive(Error, Debug)]
 pub enum SstError {
     #[error("Attempted to write {} but previous key is {}", current, previous)]
-    UNSORTED_WRTE { previous: String, current: String },
+    UnsortedWrite { previous: String, current: String },
 
     #[error(transparent)]
     Disconnect(#[from] io::Error),
@@ -30,12 +36,69 @@ pub struct Segment {
     fd: File,
     size: usize,
     previous_key: Option<String>,
+    created_at: Instant,
 }
 
+struct MetaKey<'a> {
+    key: String,
+    value: String,
+    timestamp: i32,
+    segment_iterator: &'a mut Peekable<Box<dyn Iterator<Item=KVPair>>>,
+}
+
+impl<'a> Ord for MetaKey<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key.cmp(&other.key).then(self.timestamp.cmp(&other.timestamp))
+    }
+}
+
+impl<'a> PartialEq for MetaKey<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        unimplemented!()
+    }
+}
+
+impl<'a> PartialOrd for MetaKey<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        unimplemented!()
+    }
+}
+
+impl<'a> Eq for MetaKey<'a> {}
+
+
+struct SstMerger<'a> {
+    heap: BinaryHeap<MetaKey<'a>, MinComparator>,
+    segment_iterators: Vec<Peekable<Box<dyn Iterator<Item=KVPair>>>>,
+}
+
+impl<'a> Iterator for SstMerger<'a> {
+    type Item = KVPair;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !self.heap.is_empty() {
+            let x = self.heap.pop().unwrap();
+            if x.segment_iterator.peek().is_some() {
+                let next = x.segment_iterator.next().unwrap();
+                self.heap.push(MetaKey{key:next.key, value:next.value, timestamp:x.timestamp, segment_iterator:x.segment_iterator});
+            }
+
+            return Some(KVPair{key:x.key, value:x.value});
+        }
+        None
+    }
+}
+
+
 pub fn merge<'a>(segments: impl Iterator<Item=&'a Segment>) -> Result<Vec<Segment>> {
-    let mut iterators = segments.into_iter().map(|s| s.read_from_start()).collect::<Result<Vec<_>>>()?;
-    iterators[0].next();
-    iterators[1].next();
+
+    let mut iterators = segments.
+        into_iter()
+        .map(Segment::read_from_start).
+        map(|maybe_it| maybe_it.map(|it| it.peekable()).map(Box::new))
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut heap = BinaryHeap::<MetaKey, MinComparator>::new_min();
 
     Ok(vec![])
 }
@@ -54,6 +117,7 @@ impl Segment {
             fd: OpenOptions::new().read(true).write(true).create(true).open(path).unwrap(),
             size: 0,
             previous_key: None,
+            created_at: Instant::now(),
         };
     }
 
@@ -76,16 +140,25 @@ impl Segment {
             fd: f,
             size: 0,
             previous_key: None,
+            created_at: Instant::now(),
         };
+    }
+
+
+    fn validate(&self, key: &str) -> Result<()> {
+        if self.previous_key.as_ref().map_or(false, |prev| prev.as_str() > key) {
+            return Err(SstError::UnsortedWrite { previous: self.previous_key.as_ref().unwrap().to_string(), current: key.to_owned() });
+        }
+
+        Ok(())
     }
 
 
     pub fn write(&mut self, key: String, value: String) -> Result<u64> {
 
         //check if the previously written key is bigger than the current key
-        if self.previous_key.as_ref().map_or(false, |prev| prev > &key) {
-            return Err(SstError::UNSORTED_WRTE { previous: self.previous_key.as_ref().unwrap().to_string(), current: key });
-        }
+        self.validate(&key)?;
+
         self.previous_key = Some(key.clone());
 
         let kv = KVPair { key, value };
@@ -171,7 +244,7 @@ impl Segment {
 #[cfg(test)]
 mod tests {
     use std::io::{Write, Seek, Read};
-    use crate::sst::Segment;
+    use crate::sst::{Segment, merge};
 
     extern crate tempfile;
 
@@ -272,5 +345,17 @@ mod tests {
         sst.write("k2".to_owned(), "v2".to_owned()).unwrap();
         let result = sst.write("k1".to_owned(), "v1".to_owned());
         assert!(result.is_err())
+    }
+
+    #[test]
+    fn test_merges() -> Result<(), Box<dyn std::error::Error>> {
+        let mut sst_1 = Segment::temp();
+        sst_1.write("k1".to_owned(), "k2".to_owned())?;
+        let mut sst_2 = Segment::temp();
+        sst_2.write("k2".to_owned(), "v2".to_owned())?;
+        let v = vec![sst_1, sst_2];
+        merge(v.iter())?;
+
+        Ok(())
     }
 }
