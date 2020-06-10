@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::fs::{read, File};
 
 use binary_heap_plus::*;
@@ -124,7 +126,10 @@ impl<I: Iterator<Item = KVPair>> Iterator for SstMerger<I> {
     }
 }
 
-pub fn merge<'a>(segments: impl Iterator<Item = &'a Segment>) -> Result<Vec<Segment>> {
+pub fn merge<'a>(
+    segments: impl Iterator<Item = &'a Segment>,
+    segment_size: usize,
+) -> Result<Vec<Segment>> {
     let iterators = segments
         .into_iter()
         .map(Segment::read_from_start)
@@ -133,12 +138,20 @@ pub fn merge<'a>(segments: impl Iterator<Item = &'a Segment>) -> Result<Vec<Segm
 
     let heap = BinaryHeap::<MetaKey<_>, MinComparator>::new_min();
     let merger = SstMerger::new(heap, iterators);
-    
-    for x in merger.into_iter() {
-        dbg!(x);
+    let mut res = vec![];
+    let mut segment = Segment::temp();
+    for kv in merger.into_iter() {
+        if segment.size() == segment_size {
+            res.push(segment);
+            segment = Segment::temp();
+        }
+        segment.write(kv.key, kv.value)?;
+    }
+    if segment.size() > 0 {
+        res.push(segment);
     }
 
-    Ok(vec![])
+    Ok(res)
 }
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
@@ -212,6 +225,10 @@ impl Segment {
         return Ok(current_offset);
     }
 
+    fn size(&self) -> usize {
+        return self.size;
+    }
+
     pub fn at(&self, pos: u64) -> Result<Option<String>> {
         let current = self.tell()?;
         self.seek(pos)?;
@@ -282,7 +299,7 @@ impl Segment {
 
 #[cfg(test)]
 mod tests {
-    use crate::sst::{merge, Segment};
+    use crate::sst::{merge, KVPair, Segment};
     use std::io::{Read, Seek, Write};
 
     extern crate tempfile;
@@ -386,11 +403,25 @@ mod tests {
     #[test]
     fn test_merges() -> Result<(), Box<dyn std::error::Error>> {
         let mut sst_1 = Segment::temp();
-        sst_1.write("k1".to_owned(), "k2".to_owned())?;
+        sst_1.write("k1".to_owned(), "v1".to_owned())?;
         let mut sst_2 = Segment::temp();
         sst_2.write("k2".to_owned(), "v2".to_owned())?;
         let v = vec![sst_1, sst_2];
-        merge(v.iter())?;
+        let mut merged = merge(v.iter(), 20)?;
+        assert!(merged.len() == 1);
+        let segment = merged.pop().unwrap();
+        let pairs = segment
+            .read_from_start()?
+            .map(|kv| (kv.key, kv.value))
+            .collect::<Vec<(String, String)>>();
+
+        assert_eq!(
+            pairs,
+            vec![
+                ("k1".to_owned(), "v1".to_owned()),
+                ("k2".to_owned(), "v2".to_owned())
+            ]
+        );
 
         Ok(())
     }

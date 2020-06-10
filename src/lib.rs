@@ -66,7 +66,7 @@ impl<'a> LSMEngine<'a> {
     fn merge_segments(&mut self) -> Result<()> {
         self.segments = sst::merge(self.segments
             .iter()
-            .map(Rc::deref))?
+            .map(Rc::deref), 20)?
             .into_iter()
             .map(Rc::new)
             .collect();
