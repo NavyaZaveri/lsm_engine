@@ -27,15 +27,16 @@ pub enum Error {
 type Result<T> = std::result::Result<T, self::Error>;
 
 
-pub struct LSMEngine {
+pub struct LSMEngine<'a> {
     memtable: Memtable<String, String>,
     segments: Vec<Rc<Segment>>,
     persist_data: bool,
-    sparse_memory_index: HashMap<u64, Rc<Segment>>,
+    sparse_memory_index: HashMap<u64, &'a Segment>,
 }
 
 
-impl LSMEngine {
+
+impl<'a> LSMEngine<'a> {
     pub fn new(inmemory_capacity: usize, persist_data: bool) -> Self {
         return LSMEngine {
             memtable: Memtable::new(inmemory_capacity),

@@ -2,7 +2,7 @@ use std::fs::{File, read};
 
 use std::io::{Read, Write, BufReader, BufRead, SeekFrom, Seek};
 use serde::{Serialize, Deserialize};
-use std::cell::RefCell;
+use std::cell::{RefCell, Ref};
 use std::fs::OpenOptions;
 use std::time::SystemTime;
 use std::time::Instant;
@@ -15,6 +15,7 @@ use thiserror::Error;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::iter::Peekable;
+use std::rc::Rc;
 
 
 type Result<T> = std::result::Result<T, SstError>;
@@ -43,7 +44,7 @@ struct MetaKey<'a> {
     key: String,
     value: String,
     timestamp: i32,
-    segment_iterator: &'a mut Peekable<Box<dyn Iterator<Item=KVPair>>>,
+    segment_iterator: Rc<RefCell<Peekable<Box<dyn Iterator<Item=KVPair> + 'a>>>>,
 }
 
 impl<'a> Ord for MetaKey<'a> {
@@ -77,13 +78,13 @@ impl<'a> Iterator for SstMerger<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         while !self.heap.is_empty() {
-            let x = self.heap.pop().unwrap();
-            if x.segment_iterator.peek().is_some() {
-                let next = x.segment_iterator.next().unwrap();
-                self.heap.push(MetaKey{key:next.key, value:next.value, timestamp:x.timestamp, segment_iterator:x.segment_iterator});
+            let mut x = self.heap.pop().unwrap();
+            if x.segment_iterator.borrow_mut().peek().is_some() {
+                let next = x.segment_iterator.borrow_mut().next().unwrap();
+                self.heap.push(MetaKey { key: next.key, value: next.value, timestamp: x.timestamp, segment_iterator: x.segment_iterator });
             }
 
-            return Some(KVPair{key:x.key, value:x.value});
+            return Some(KVPair { key: x.key, value: x.value });
         }
         None
     }
@@ -91,14 +92,22 @@ impl<'a> Iterator for SstMerger<'a> {
 
 
 pub fn merge<'a>(segments: impl Iterator<Item=&'a Segment>) -> Result<Vec<Segment>> {
-
     let mut iterators = segments.
         into_iter()
         .map(Segment::read_from_start).
-        map(|maybe_it| maybe_it.map(|it| it.peekable()).map(Box::new))
+
+        map(|maybe_it| maybe_it.map(|it| Rc::new(RefCell::new((Box::new(it) as Box<dyn Iterator<Item=KVPair>>).peekable()))))
         .collect::<Result<Vec<_>>>()?;
 
     let mut heap = BinaryHeap::<MetaKey, MinComparator>::new_min();
+    //init the heap
+    for mut it in &mut iterators {
+        if it.borrow_mut().peek().is_some() {
+            let kv = it.borrow_mut().next().unwrap();
+            let meta_key = MetaKey { key: kv.key, value: kv.value, timestamp: 0, segment_iterator: it.clone() };
+            heap.push(meta_key);
+        }
+    }
 
     Ok(vec![])
 }
@@ -149,7 +158,6 @@ impl Segment {
         if self.previous_key.as_ref().map_or(false, |prev| prev.as_str() > key) {
             return Err(SstError::UnsortedWrite { previous: self.previous_key.as_ref().unwrap().to_string(), current: key.to_owned() });
         }
-
         Ok(())
     }
 
