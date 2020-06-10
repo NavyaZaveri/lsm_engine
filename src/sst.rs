@@ -40,40 +40,40 @@ pub struct Segment {
     created_at: Instant,
 }
 
-struct MetaKey<'a> {
+struct MetaKey<I: Iterator<Item=KVPair>> {
     key: String,
     value: String,
     timestamp: i32,
-    segment_iterator: Rc<RefCell<Peekable<Box<dyn Iterator<Item=KVPair> + 'a>>>>,
+    segment_iterator: Rc<RefCell<Peekable<I>>>,
 }
 
-impl<'a> Ord for MetaKey<'a> {
+impl<I: Iterator<Item=KVPair>> Ord for MetaKey<I> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.key.cmp(&other.key).then(self.timestamp.cmp(&other.timestamp))
     }
 }
 
-impl<'a> PartialEq for MetaKey<'a> {
+impl<I: Iterator<Item=KVPair>> PartialEq for MetaKey<I> {
     fn eq(&self, other: &Self) -> bool {
         unimplemented!()
     }
 }
 
-impl<'a> PartialOrd for MetaKey<'a> {
+impl<I: Iterator<Item=KVPair>> PartialOrd for MetaKey<I> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         unimplemented!()
     }
 }
 
-impl<'a> Eq for MetaKey<'a> {}
+impl<I: Iterator<Item=KVPair>> Eq for MetaKey<I> {}
 
 
-struct SstMerger<'a> {
-    heap: BinaryHeap<MetaKey<'a>, MinComparator>,
-    segment_iterators: Vec<Peekable<Box<dyn Iterator<Item=KVPair>>>>,
+struct SstMerger<I: Iterator<Item=KVPair>> {
+    heap: BinaryHeap<MetaKey<I>, MinComparator>,
+    segment_iterators: Vec<Peekable<I>>,
 }
 
-impl<'a> Iterator for SstMerger<'a> {
+impl<I: Iterator<Item=KVPair>> Iterator for SstMerger<I> {
     type Item = KVPair;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -96,10 +96,10 @@ pub fn merge<'a>(segments: impl Iterator<Item=&'a Segment>) -> Result<Vec<Segmen
         into_iter()
         .map(Segment::read_from_start).
 
-        map(|maybe_it| maybe_it.map(|it| Rc::new(RefCell::new((Box::new(it) as Box<dyn Iterator<Item=KVPair>>).peekable()))))
+        map(|maybe_it| maybe_it.map(|it| Rc::new(RefCell::new((it).peekable()))))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut heap = BinaryHeap::<MetaKey, MinComparator>::new_min();
+    let mut heap = BinaryHeap::<MetaKey<_>, MinComparator>::new_min();
     //init the heap
     for mut it in &mut iterators {
         if it.borrow_mut().peek().is_some() {
