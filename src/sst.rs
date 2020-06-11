@@ -134,9 +134,10 @@ impl<I: Iterator<Item=KVPair>> Iterator for SstMerger<I> {
     }
 }
 
-pub fn merge(
+pub fn merge<F: FnMut(usize, u64, String) -> ()>(
     segments: Vec<Segment>,
     segment_size: usize,
+    mut callback_on_write: F,
 ) -> Result<Vec<Segment>> {
     let segment_timestamps = segments.iter().map(|s| s.created_at).collect::<Vec<_>>();
 
@@ -155,25 +156,28 @@ pub fn merge(
     let merger = SstMerger::new(heap, iterator_with_timestamp);
     let mut res = vec![];
     let mut segment = Segment::temp();
+    let mut segment_count: usize = 0;
 
     for kv in merger.into_iter() {
         if segment.size() == segment_size {
             res.push(segment);
             segment = Segment::temp();
+            segment_count += 1;
         }
-        segment.write(kv.key, kv.value)?;
+        let cloned_key = kv.key.clone();
+        let offset = segment.write(kv.key, kv.value)?;
+        callback_on_write(segment_count, offset, cloned_key);
     }
     if segment.size() > 0 {
         res.push(segment);
     }
-
     Ok(res)
 }
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct KVPair {
-    key: String,
-    value: String,
+    pub key: String,
+    pub value: String,
 }
 
 impl Segment {
@@ -290,7 +294,7 @@ impl Segment {
         return self.search_from(key, 0);
     }
 
-    fn tell(&self) -> Result<u64> {
+    pub(crate) fn tell(&self) -> Result<u64> {
         let offset = RefCell::new(&self.fd)
             .borrow_mut()
             .seek(SeekFrom::Current(0))?;
@@ -426,13 +430,13 @@ mod tests {
         let mut sst_2 = Segment::temp();
         sst_2.write("k2".to_owned(), "v2".to_owned())?;
         let v = vec![sst_1, sst_2];
-        let mut merged = merge(v, 20)?;
+        let mut merged = merge(v, 20, |index, offset, _| {})?;
         assert_eq!(merged.len(), 1);
         let segment = merged.pop().unwrap();
-        let pairs = segment
+        let pairs: Vec<_> = segment
             .read_from_start()?
             .map(|kv| (kv.key, kv.value))
-            .collect::<Vec<(String, String)>>();
+            .collect();
 
         assert_eq!(
             pairs,
@@ -452,9 +456,9 @@ mod tests {
         sst_1.write("k1".to_owned(), "v1".to_owned())?;
         sst_2.write("k1".to_owned(), "v2".to_owned())?;
         let v = vec![sst_1, sst_2];
-        let merged = merge(v, 100)?;
+        let merged = merge(v, 100, |index, offset, _| {})?;
         let expected = vec![("k1".to_owned(), "v2".to_owned())];
-        let actual = merged[0].read_from_start()?.map(|kv| (kv.key, kv.value)).collect::<Vec<_>>();
+        let actual: Vec<_> = merged[0].read_from_start()?.map(|kv| (kv.key, kv.value)).collect();
         assert_eq!(expected, actual);
         Ok(())
     }
