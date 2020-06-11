@@ -1,5 +1,5 @@
 use crate::memtable::{Memtable, ValueStatus};
-use crate::sst::{Segment, SstError};
+use crate::sst::{Segment};
 use std::collections::BTreeMap;
 use std::ops::Bound::{Included, Unbounded};
 

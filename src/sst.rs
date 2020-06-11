@@ -323,8 +323,7 @@ impl Segment {
 
 #[cfg(test)]
 mod tests {
-    use crate::sst::{merge, KVPair, Segment};
-    use std::io::{Read, Seek, Write};
+    use crate::sst::{merge, Segment};
 
     extern crate tempfile;
 
