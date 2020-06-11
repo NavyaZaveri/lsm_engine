@@ -60,7 +60,7 @@ impl<'a> LSMEngine<'a> {
     }
 
     fn merge_segments(&mut self) -> Result<()> {
-        self.segments = sst::merge(self.segments.iter(), 20)?;
+        self.segments = sst::merge(std::mem::take(&mut self.segments), 20)?;
         Ok(())
     }
 

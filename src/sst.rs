@@ -19,7 +19,6 @@ use std::iter::Peekable;
 use std::rc::Rc;
 
 type Result<T> = std::result::Result<T, SstError>;
-type SegmentIterator<I: Iterator<Item = KVPair>> = Rc<RefCell<Peekable<I>>>;
 
 #[derive(Error, Debug)]
 pub enum SstError {
@@ -40,14 +39,14 @@ pub struct Segment {
     created_at: Instant,
 }
 
-struct MetaKey<'a, I: Iterator<Item = KVPair>> {
+struct MetaKey {
     key: String,
     value: String,
-    timestamp: i32,
-    segment_iterator: &'a mut Peekable<I>,
+    timestamp: Instant,
+    which_segment: usize,
 }
 
-impl<'a, I: Iterator<Item = KVPair>> Ord for MetaKey<'a, I> {
+impl Ord for MetaKey {
     fn cmp(&self, other: &Self) -> Ordering {
         self.key
             .cmp(&other.key)
@@ -55,72 +54,83 @@ impl<'a, I: Iterator<Item = KVPair>> Ord for MetaKey<'a, I> {
     }
 }
 
-impl<'a, I: Iterator<Item = KVPair>> PartialEq for MetaKey<'a, I> {
+impl PartialEq for MetaKey {
     fn eq(&self, other: &Self) -> bool {
-        unimplemented!()
+        return self.key == other.key && self.timestamp == other.timestamp;
     }
 }
 
-impl<'a, I: Iterator<Item = KVPair>> PartialOrd for MetaKey<'a, I> {
+impl PartialOrd for MetaKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        unimplemented!()
+        return Some(
+            self.key
+                .cmp(&other.key)
+                .then(self.timestamp.cmp(&other.timestamp)),
+        );
     }
 }
 
-impl<'a, I: Iterator<Item = KVPair>> Eq for MetaKey<'a, I> {}
+impl Eq for MetaKey {}
 
-struct SstMerger<'a, I: Iterator<Item = KVPair>> {
-    heap: BinaryHeap<MetaKey<'a, I>, MinComparator>,
+struct SstMerger<I: Iterator<Item = KVPair>> {
+    heap: BinaryHeap<MetaKey, MinComparator>,
     segment_iterators: Vec<Peekable<I>>,
+    previous_key: Option<String>,
 }
 
-impl<'a, I: Iterator<Item = KVPair>> SstMerger<'a, I> {
+impl<I: Iterator<Item = KVPair>> SstMerger<I> {
     fn new(
-        mut heap: BinaryHeap<MetaKey<'a, I>, MinComparator>,
-        mut segment_iterators: Vec<Peekable<I>>,
+        mut heap: BinaryHeap<MetaKey, MinComparator>,
+        mut segment_iterators_with_timestamp: Vec<(Peekable<I>, Instant)>,
     ) -> Self {
-        
-        for it in &mut segment_iterators {
+        //initialize the heap
+        for (index, (it, timestamp)) in segment_iterators_with_timestamp.iter_mut().enumerate() {
             if it.peek().is_some() {
                 let kv = it.next().unwrap();
                 let meta_key = MetaKey {
                     key: kv.key,
                     value: kv.value,
-                    timestamp: 0,
-                    segment_iterator: it,
+                    timestamp: *timestamp,
+                    which_segment: index,
                 };
                 heap.push(meta_key);
             }
         }
         return Self {
             heap,
-            segment_iterators,
+            segment_iterators: segment_iterators_with_timestamp.into_iter().map(|x| x.0).collect(),
+            previous_key: None,
         };
     }
 }
 
-impl<'a, I: Iterator<Item = KVPair>> Iterator for SstMerger<'a, I> {
+impl<I: Iterator<Item = KVPair>> Iterator for SstMerger<I> {
     type Item = KVPair;
 
     fn next(&mut self) -> Option<Self::Item> {
         while !self.heap.is_empty() {
-            let mut x = self.heap.pop().unwrap();
-            if x.segment_iterator.peek().is_some() {
-                let next = x.segment_iterator.next().unwrap();
+            let meta_key = self.heap.pop().unwrap();
+            let segment_iterator = &mut self.segment_iterators[meta_key.which_segment];
+            if Some(meta_key.key.clone()) == self.previous_key {
+                continue;
+            }
+            if segment_iterator.peek().is_some() {
+                let next = segment_iterator.next().unwrap();
                 self.heap.push(MetaKey {
                     key: next.key,
                     value: next.value,
-                    timestamp: x.timestamp,
-                    segment_iterator: x.segment_iterator,
+                    timestamp: meta_key.timestamp,
+                    which_segment: meta_key.which_segment,
                 });
+                self.previous_key = Some(meta_key.key.clone());
                 return Some(KVPair {
-                    key: x.key,
-                    value: x.value,
+                    key: meta_key.key,
+                    value: meta_key.value,
                 });
             }
             return Some(KVPair {
-                key: x.key,
-                value: x.value,
+                key: meta_key.key,
+                value: meta_key.value,
             });
         }
         None
@@ -128,17 +138,24 @@ impl<'a, I: Iterator<Item = KVPair>> Iterator for SstMerger<'a, I> {
 }
 
 pub fn merge<'a>(
-    segments: impl Iterator<Item = &'a Segment>,
+    segments: Vec<Segment>,
     segment_size: usize,
 ) -> Result<Vec<Segment>> {
+    let segment_timestamps = segments.iter().map(|s| s.created_at).collect::<Vec<_>>();
+
     let iterators = segments
-        .into_iter()
-        .map(Segment::read_from_start)
+        .iter()
+        .map(|s| s.read_from_start())
         .map(|maybe_it| maybe_it.map(|it| it.peekable()))
         .collect::<Result<Vec<_>>>()?;
 
-    let heap = BinaryHeap::<MetaKey<_>, MinComparator>::new_min();
-    let merger = SstMerger::new(heap, iterators);
+    let heap = BinaryHeap::<MetaKey, MinComparator>::new_min();
+    let iterator_with_timestamp = iterators
+        .into_iter()
+        .zip(segment_timestamps)
+        .collect::<Vec<_>>();
+
+    let merger = SstMerger::new(heap, iterator_with_timestamp);
     let mut res = vec![];
     let mut segment = Segment::temp();
     for kv in merger.into_iter() {
@@ -185,6 +202,10 @@ impl Segment {
         let now = SystemTime::now();
         let s = format!("{:?}", now);
         return Segment::new(&s);
+    }
+
+    pub fn timestamp(&self) -> Instant {
+        return self.created_at;
     }
 
     pub fn with_file(f: File) -> Segment {
@@ -291,7 +312,6 @@ impl Segment {
             .expect("something went wrong deserializing the contents of the segment file")
         });
     }
-
     pub fn read_from_start(&self) -> Result<impl Iterator<Item = KVPair> + '_> {
         self.reset()?;
         return Ok(self.read());
@@ -408,7 +428,7 @@ mod tests {
         let mut sst_2 = Segment::temp();
         sst_2.write("k2".to_owned(), "v2".to_owned())?;
         let v = vec![sst_1, sst_2];
-        let mut merged = merge(v.iter(), 20)?;
+        let mut merged = merge(v, 20)?;
         assert!(merged.len() == 1);
         let segment = merged.pop().unwrap();
         let pairs = segment
