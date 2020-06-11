@@ -40,14 +40,14 @@ pub struct Segment {
     created_at: Instant,
 }
 
-struct MetaKey<I: Iterator<Item = KVPair>> {
+struct MetaKey<'a, I: Iterator<Item = KVPair>> {
     key: String,
     value: String,
     timestamp: i32,
-    segment_iterator: Rc<RefCell<Peekable<I>>>,
+    segment_iterator: &'a mut Peekable<I>,
 }
 
-impl<I: Iterator<Item = KVPair>> Ord for MetaKey<I> {
+impl<'a, I: Iterator<Item = KVPair>> Ord for MetaKey<'a, I> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.key
             .cmp(&other.key)
@@ -55,38 +55,39 @@ impl<I: Iterator<Item = KVPair>> Ord for MetaKey<I> {
     }
 }
 
-impl<I: Iterator<Item = KVPair>> PartialEq for MetaKey<I> {
+impl<'a, I: Iterator<Item = KVPair>> PartialEq for MetaKey<'a, I> {
     fn eq(&self, other: &Self) -> bool {
         unimplemented!()
     }
 }
 
-impl<I: Iterator<Item = KVPair>> PartialOrd for MetaKey<I> {
+impl<'a, I: Iterator<Item = KVPair>> PartialOrd for MetaKey<'a, I> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         unimplemented!()
     }
 }
 
-impl<I: Iterator<Item = KVPair>> Eq for MetaKey<I> {}
+impl<'a, I: Iterator<Item = KVPair>> Eq for MetaKey<'a, I> {}
 
-struct SstMerger<I: Iterator<Item = KVPair>> {
-    heap: BinaryHeap<MetaKey<I>, MinComparator>,
-    segment_iterators: Vec<SegmentIterator<I>>,
+struct SstMerger<'a, I: Iterator<Item = KVPair>> {
+    heap: BinaryHeap<MetaKey<'a, I>, MinComparator>,
+    segment_iterators: Vec<Peekable<I>>,
 }
 
-impl<I: Iterator<Item = KVPair>> SstMerger<I> {
+impl<'a, I: Iterator<Item = KVPair>> SstMerger<'a, I> {
     fn new(
-        mut heap: BinaryHeap<MetaKey<I>, MinComparator>,
-        mut segment_iterators: Vec<SegmentIterator<I>>,
+        mut heap: BinaryHeap<MetaKey<'a, I>, MinComparator>,
+        mut segment_iterators: Vec<Peekable<I>>,
     ) -> Self {
+        
         for it in &mut segment_iterators {
-            if it.borrow_mut().peek().is_some() {
-                let kv = it.borrow_mut().next().unwrap();
+            if it.peek().is_some() {
+                let kv = it.next().unwrap();
                 let meta_key = MetaKey {
                     key: kv.key,
                     value: kv.value,
                     timestamp: 0,
-                    segment_iterator: it.clone(),
+                    segment_iterator: it,
                 };
                 heap.push(meta_key);
             }
@@ -98,14 +99,14 @@ impl<I: Iterator<Item = KVPair>> SstMerger<I> {
     }
 }
 
-impl<I: Iterator<Item = KVPair>> Iterator for SstMerger<I> {
+impl<'a, I: Iterator<Item = KVPair>> Iterator for SstMerger<'a, I> {
     type Item = KVPair;
 
     fn next(&mut self) -> Option<Self::Item> {
         while !self.heap.is_empty() {
-            let x = self.heap.pop().unwrap();
-            if x.segment_iterator.borrow_mut().peek().is_some() {
-                let next = x.segment_iterator.borrow_mut().next().unwrap();
+            let mut x = self.heap.pop().unwrap();
+            if x.segment_iterator.peek().is_some() {
+                let next = x.segment_iterator.next().unwrap();
                 self.heap.push(MetaKey {
                     key: next.key,
                     value: next.value,
@@ -133,7 +134,7 @@ pub fn merge<'a>(
     let iterators = segments
         .into_iter()
         .map(Segment::read_from_start)
-        .map(|maybe_it| maybe_it.map(|it| Rc::new(RefCell::new(it.peekable()))))
+        .map(|maybe_it| maybe_it.map(|it| it.peekable()))
         .collect::<Result<Vec<_>>>()?;
 
     let heap = BinaryHeap::<MetaKey<_>, MinComparator>::new_min();
