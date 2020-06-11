@@ -50,7 +50,7 @@ impl Ord for MetaKey {
     fn cmp(&self, other: &Self) -> Ordering {
         self.key
             .cmp(&other.key)
-            .then(self.timestamp.cmp(&other.timestamp))
+            .then(self.timestamp.cmp(&other.timestamp).reverse())
     }
 }
 
@@ -65,20 +65,20 @@ impl PartialOrd for MetaKey {
         return Some(
             self.key
                 .cmp(&other.key)
-                .then(self.timestamp.cmp(&other.timestamp)),
+                .then(self.timestamp.cmp(&other.timestamp).reverse()),
         );
     }
 }
 
 impl Eq for MetaKey {}
 
-struct SstMerger<I: Iterator<Item = KVPair>> {
+struct SstMerger<I: Iterator<Item=KVPair>> {
     heap: BinaryHeap<MetaKey, MinComparator>,
     segment_iterators: Vec<Peekable<I>>,
     previous_key: Option<String>,
 }
 
-impl<I: Iterator<Item = KVPair>> SstMerger<I> {
+impl<I: Iterator<Item=KVPair>, > SstMerger<I> {
     fn new(
         mut heap: BinaryHeap<MetaKey, MinComparator>,
         mut segment_iterators_with_timestamp: Vec<(Peekable<I>, Instant)>,
@@ -104,7 +104,7 @@ impl<I: Iterator<Item = KVPair>> SstMerger<I> {
     }
 }
 
-impl<I: Iterator<Item = KVPair>> Iterator for SstMerger<I> {
+impl<I: Iterator<Item=KVPair>> Iterator for SstMerger<I> {
     type Item = KVPair;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -114,6 +114,7 @@ impl<I: Iterator<Item = KVPair>> Iterator for SstMerger<I> {
             if Some(meta_key.key.clone()) == self.previous_key {
                 continue;
             }
+            self.previous_key = Some(meta_key.key.clone());
             if segment_iterator.peek().is_some() {
                 let next = segment_iterator.next().unwrap();
                 self.heap.push(MetaKey {
@@ -122,12 +123,12 @@ impl<I: Iterator<Item = KVPair>> Iterator for SstMerger<I> {
                     timestamp: meta_key.timestamp,
                     which_segment: meta_key.which_segment,
                 });
-                self.previous_key = Some(meta_key.key.clone());
                 return Some(KVPair {
                     key: meta_key.key,
                     value: meta_key.value,
                 });
             }
+
             return Some(KVPair {
                 key: meta_key.key,
                 value: meta_key.value,
@@ -137,7 +138,7 @@ impl<I: Iterator<Item = KVPair>> Iterator for SstMerger<I> {
     }
 }
 
-pub fn merge<'a>(
+pub fn merge(
     segments: Vec<Segment>,
     segment_size: usize,
 ) -> Result<Vec<Segment>> {
@@ -158,6 +159,7 @@ pub fn merge<'a>(
     let merger = SstMerger::new(heap, iterator_with_timestamp);
     let mut res = vec![];
     let mut segment = Segment::temp();
+
     for kv in merger.into_iter() {
         if segment.size() == segment_size {
             res.push(segment);
@@ -303,16 +305,16 @@ impl Segment {
         Ok(())
     }
 
-    pub fn read(&self) -> impl Iterator<Item = KVPair> + '_ {
+    pub fn read(&self) -> impl Iterator<Item=KVPair> + '_ {
         let reader = BufReader::new(&self.fd);
         return reader.lines().map(|string| {
             serde_json::from_str::<KVPair>(
                 &string.expect("the segment file should not be tampered with"),
             )
-            .expect("something went wrong deserializing the contents of the segment file")
+                .expect("something went wrong deserializing the contents of the segment file")
         });
     }
-    pub fn read_from_start(&self) -> Result<impl Iterator<Item = KVPair> + '_> {
+    pub fn read_from_start(&self) -> Result<impl Iterator<Item=KVPair> + '_> {
         self.reset()?;
         return Ok(self.read());
     }
@@ -429,7 +431,7 @@ mod tests {
         sst_2.write("k2".to_owned(), "v2".to_owned())?;
         let v = vec![sst_1, sst_2];
         let mut merged = merge(v, 20)?;
-        assert!(merged.len() == 1);
+        assert_eq!(merged.len(), 1);
         let segment = merged.pop().unwrap();
         let pairs = segment
             .read_from_start()?
@@ -444,6 +446,20 @@ mod tests {
             ]
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_with_same_keys_different_timestamps() -> Result<(), Box<dyn std::error::Error>> {
+        let mut sst_1 = Segment::temp();
+        let mut sst_2 = Segment::temp();
+        sst_1.write("k1".to_owned(), "v1".to_owned())?;
+        sst_2.write("k1".to_owned(), "v2".to_owned())?;
+        let v = vec![sst_1, sst_2];
+        let merged = merge(v, 100)?;
+        let expected = vec![("k1".to_owned(), "v2".to_owned())];
+        let actual = merged[0].read_from_start()?.map(|kv| (kv.key, kv.value)).collect::<Vec<_>>();
+        assert_eq!(expected, actual);
         Ok(())
     }
 }

@@ -15,6 +15,9 @@ lazy_static! {
     static ref TOMBSTONE_VALUE: &'static str = "TOMBSTONE";
 }
 
+type segment_offset = u64;
+type segment_index = usize;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
@@ -23,14 +26,14 @@ pub enum Error {
 
 type Result<T> = std::result::Result<T, self::Error>;
 
-pub struct LSMEngine<'a> {
+pub struct LSMEngine {
     memtable: Memtable<String, String>,
     segments: Vec<Segment>,
     persist_data: bool,
-    sparse_memory_index: HashMap<u64, &'a Segment>,
+    sparse_memory_index: HashMap<String, Vec<(segment_offset, segment_index)>>,
 }
 
-impl<'a> LSMEngine<'a> {
+impl LSMEngine {
     pub fn new(inmemory_capacity: usize, persist_data: bool) -> Self {
         return LSMEngine {
             memtable: Memtable::new(inmemory_capacity),
