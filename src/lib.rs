@@ -1,6 +1,6 @@
 use crate::memtable::{Memtable, ValueStatus};
 use crate::sst::{Segment, SstError};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, BTreeMap};
 use std::ops::Deref;
 use std::rc::Rc;
 use thiserror::Error;
@@ -30,7 +30,7 @@ pub struct LSMEngine {
     memtable: Memtable<String, String>,
     segments: Vec<Segment>,
     persist_data: bool,
-    sparse_memory_index: HashMap<String, Vec<(segment_offset, segment_index)>>,
+    sparse_memory_index: BTreeMap<String, Vec<(segment_offset, segment_index)>>,
 }
 
 impl LSMEngine {
@@ -38,7 +38,7 @@ impl LSMEngine {
         return LSMEngine {
             memtable: Memtable::new(inmemory_capacity),
             segments: Vec::new(),
-            sparse_memory_index: HashMap::new(),
+            sparse_memory_index: BTreeMap::new(),
             persist_data,
         };
     }
@@ -61,6 +61,8 @@ impl LSMEngine {
         }
         return Ok(new_segment);
     }
+
+    fn update_sparse_table(&mut self) {}
 
     fn merge_segments(&mut self) -> Result<()> {
         self.segments = sst::merge(std::mem::take(&mut self.segments), 20)?;
@@ -85,6 +87,7 @@ impl LSMEngine {
                 ValueStatus::Tombstone => Ok(None),
             };
         }
+
 
         //go through all segments in reverse order since the newest segments are inserted last
         for seg in self.segments.iter().rev() {

@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use std::cmp::Ordering;
 use std::iter::Peekable;
-use std::rc::Rc;
+
 
 type Result<T> = std::result::Result<T, SstError>;
 
@@ -62,11 +62,7 @@ impl PartialEq for MetaKey {
 
 impl PartialOrd for MetaKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        return Some(
-            self.key
-                .cmp(&other.key)
-                .then(self.timestamp.cmp(&other.timestamp).reverse()),
-        );
+        return Some(self.cmp(self));
     }
 }
 
@@ -78,7 +74,7 @@ struct SstMerger<I: Iterator<Item=KVPair>> {
     previous_key: Option<String>,
 }
 
-impl<I: Iterator<Item=KVPair>, > SstMerger<I> {
+impl<I: Iterator<Item=KVPair>> SstMerger<I> {
     fn new(
         mut heap: BinaryHeap<MetaKey, MinComparator>,
         mut segment_iterators_with_timestamp: Vec<(Peekable<I>, Instant)>,
@@ -261,6 +257,7 @@ impl Segment {
         Ok(value)
     }
 
+
     fn seek(&self, pos: u64) -> Result<()> {
         RefCell::new(&self.fd)
             .borrow_mut()
@@ -377,7 +374,6 @@ mod tests {
 
         let second = iterator.next();
         assert_eq!(Some("v2".to_owned()), second.map(|kv| kv.value));
-
         assert_eq!(None, iterator.next());
 
         Ok(())
