@@ -1,40 +1,34 @@
 use crate::memtable::{Memtable, ValueStatus};
-use std::collections::{HashSet, HashMap};
 use crate::sst::{Segment, SstError};
+use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
 use std::rc::Rc;
 use thiserror::Error;
-use std::ops::Deref;
 
 #[macro_use]
 extern crate lazy_static;
 
-
 mod memtable;
 mod sst;
 
-
 lazy_static! {
-    static ref TOMBSTONE_VALUE:&'static str= "TOMBSTONE";
+    static ref TOMBSTONE_VALUE: &'static str = "TOMBSTONE";
 }
-
 
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
-    SstError(#[from] sst::SstError)
+    SstError(#[from] sst::SstError),
 }
 
 type Result<T> = std::result::Result<T, self::Error>;
 
-
 pub struct LSMEngine<'a> {
     memtable: Memtable<String, String>,
-    segments: Vec<Rc<Segment>>,
+    segments: Vec<Segment>,
     persist_data: bool,
     sparse_memory_index: HashMap<u64, &'a Segment>,
 }
-
-
 
 impl<'a> LSMEngine<'a> {
     pub fn new(inmemory_capacity: usize, persist_data: bool) -> Self {
@@ -46,9 +40,12 @@ impl<'a> LSMEngine<'a> {
         };
     }
 
-
     fn flush_memtable(&mut self) -> Result<Segment> {
-        let mut new_segment = if self.persist_data { Segment::default() } else { Segment::temp() };
+        let mut new_segment = if self.persist_data {
+            Segment::default()
+        } else {
+            Segment::temp()
+        };
         for (k, value_status) in self.memtable.drain() {
             match value_status {
                 ValueStatus::Present(value) => {
@@ -58,25 +55,19 @@ impl<'a> LSMEngine<'a> {
                     new_segment.write(k, TOMBSTONE_VALUE.to_string())?;
                 }
             }
-        };
+        }
         return Ok(new_segment);
     }
 
-
     fn merge_segments(&mut self) -> Result<()> {
-        self.segments = sst::merge(self.segments
-            .iter()
-            .map(Rc::deref), 20)?
-            .into_iter()
-            .map(Rc::new)
-            .collect();
+        self.segments = sst::merge(self.segments.iter(), 20)?;
         Ok(())
     }
 
     pub fn write(&mut self, key: String, value: String) -> Result<()> {
         if self.memtable.at_capacity() && !self.memtable.contains(&key) {
             let new_segment = self.flush_memtable()?;
-            self.segments.push(Rc::new(new_segment));
+            self.segments.push(new_segment);
             self.memtable.insert(key, value);
         } else {
             self.memtable.insert(key, value);
@@ -84,12 +75,11 @@ impl<'a> LSMEngine<'a> {
         Ok(())
     }
 
-
     pub fn read(&mut self, key: &str) -> Result<Option<String>> {
         if let Some(value_status) = self.memtable.get(key) {
             return match value_status {
-                ValueStatus::Present(value) => { Ok(Some(value.to_owned())) }
-                ValueStatus::Tombstone => { Ok(None) }
+                ValueStatus::Present(value) => Ok(Some(value.to_owned())),
+                ValueStatus::Tombstone => Ok(None),
             };
         }
 
@@ -99,7 +89,10 @@ impl<'a> LSMEngine<'a> {
             let maybe_value = seg.search_from_start(key)?;
 
             //make sure it's not the tombstone value
-            if maybe_value.as_ref().map_or(false, |v| v != &TOMBSTONE_VALUE.to_string()) {
+            if maybe_value
+                .as_ref()
+                .map_or(false, |v| v != &TOMBSTONE_VALUE.to_string())
+            {
                 return Ok(maybe_value);
             }
         }
@@ -111,7 +104,6 @@ impl<'a> LSMEngine<'a> {
 }
 
 fn main() {}
-
 
 #[cfg(test)]
 mod tests {
