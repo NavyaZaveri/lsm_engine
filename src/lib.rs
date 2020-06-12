@@ -27,22 +27,27 @@
 //! ### Design
 //!
 
-use crate::memtable::{Memtable, ValueStatus};
+use crate::memtable::{Memtable};
 use crate::sst::{Segment};
 use std::collections::BTreeMap;
 use std::ops::Bound::{Included, Unbounded};
 use rand::Rng;
 use thiserror::Error;
 use rand::distributions::Alphanumeric;
+use crate::kv::KVPair;
+use crate::wal::Wal;
+use std::fs::{File, OpenOptions};
+
 
 #[macro_use]
 extern crate lazy_static;
 
 mod memtable;
 mod sst;
-
+mod wal;
+mod kv;
 lazy_static! {
-    static ref TOMBSTONE_VALUE:String = rand::thread_rng().sample_iter(&Alphanumeric).take(20).collect::<String>(); //TODO: change this
+    static ref TOMBSTONE_VALUE:String = rand::thread_rng().sample_iter(&Alphanumeric).take(20).collect::<String>(); //TODO: make this deterministic!!
 }
 
 
@@ -53,7 +58,13 @@ type SegmentIndex = usize;
 pub enum Error {
     #[error(transparent)]
     SstError(#[from] sst::SstError),
+    #[error(transparent)]
+    WalError(#[from] wal::WalError),
+
+    #[error(transparent)]
+    KvError(#[from] kv::KvError),
 }
+
 
 pub type Result<T> = std::result::Result<T, self::Error>;
 
@@ -64,6 +75,7 @@ pub struct LSMEngine {
     segment_size: usize,
     sparse_memory_index: BTreeMap<String, (KeyOffset, SegmentIndex)>,
     sparse_offset: usize,
+    wal: Option<Wal>,
 }
 
 
@@ -72,7 +84,7 @@ pub struct LSMBuilder {
     segment_size: usize,
     sparse_offset: usize,
     inmemory_capacity: usize,
-
+    wal: Option<Wal>,
 }
 
 impl LSMBuilder {
@@ -82,6 +94,7 @@ impl LSMBuilder {
             segment_size: 1500,
             sparse_offset: 35,
             inmemory_capacity: 500,
+            wal: None,
         };
     }
 
@@ -99,18 +112,28 @@ impl LSMBuilder {
         self.sparse_offset = sparse_offset;
         return self;
     }
+    pub fn wal_filename(mut self, path: String) -> Self {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(path)
+            .unwrap();
+        self.wal = Some(Wal::new(file));
+        return self;
+    }
 
     pub fn inmemory_capacity(mut self, inmemory_capacity: usize) -> Self {
         self.inmemory_capacity = inmemory_capacity;
         return self;
     }
     pub fn build(self) -> LSMEngine {
-        return LSMEngine::new(self.inmemory_capacity, self.segment_size, self.sparse_offset, self.persist_data);
+        return LSMEngine::new(self.inmemory_capacity, self.segment_size, self.sparse_offset, self.persist_data, self.wal);
     }
 }
 
 impl LSMEngine {
-    fn new(inmemory_capacity: usize, segment_size: usize, sparse_offset: usize, persist_data: bool) -> Self {
+    fn new(inmemory_capacity: usize, segment_size: usize, sparse_offset: usize, persist_data: bool, wal: Option<Wal>) -> Self {
         if segment_size < inmemory_capacity {
             panic!("segment size {} cannot be less than in-memory capacity {}", segment_size, inmemory_capacity)
         }
@@ -122,24 +145,30 @@ impl LSMEngine {
             persist_data,
             segment_size,
             sparse_offset,
+            wal,
         }
     }
 
+    fn recover_from(&mut self, wal_file: File) -> Result<()> {
+        self.clear();
+        let wal_file = Wal::new(wal_file);
+        for maybe_kv in wal_file.readall() {
+            let kv = maybe_kv?;
+            self.write(kv.key, kv.value)?;
+        }
+        self.wal = Some(wal_file);
+        Ok(())
+    }
+
+    fn clear(&mut self) {
+        self.segments.clear();
+        self.sparse_memory_index.clear();
+    }
+
     fn flush_memtable(&mut self) -> Result<Segment> {
-        let mut new_segment = if self.persist_data {
-            Segment::default()
-        } else {
-            Segment::temp()
-        };
-        for (k, value_status) in self.memtable.drain() {
-            match value_status {
-                ValueStatus::Present(value) => {
-                    new_segment.write(k, value)?;
-                }
-                ValueStatus::Tombstone => {
-                    new_segment.write(k, TOMBSTONE_VALUE.to_string())?;
-                }
-            }
+        let mut new_segment = Segment::temp();
+        for (key, value) in self.memtable.drain() {
+            new_segment.write(KVPair { key, value })?;
         }
         return Ok(new_segment);
     }
@@ -148,7 +177,7 @@ impl LSMEngine {
     fn merge_segments(&mut self) -> Result<()> {
         self.sparse_memory_index.clear();
         let mut count = 0;
-        self.segments = sst::merge(std::mem::take(&mut self.segments), self.segment_size, self.persist_data,
+        self.segments = sst::merge(std::mem::take(&mut self.segments), self.segment_size,
                                    |segment_index, key_offset, key| {
                                        if count % self.sparse_offset == 0 {
                                            self.sparse_memory_index.insert(key, (key_offset, segment_index));
@@ -159,6 +188,9 @@ impl LSMEngine {
     }
 
     pub fn write(&mut self, key: String, value: String) -> Result<()> {
+        if self.wal.is_some() {
+            self.wal.as_mut().unwrap().write(KVPair { key: key.clone(), value: value.clone() })?;
+        }
         if self.memtable.at_capacity() && !self.memtable.contains(&key) {
             let new_segment = self.flush_memtable()?;
             self.segments.push(new_segment);
@@ -172,38 +204,43 @@ impl LSMEngine {
 
 
     pub fn read(&mut self, key: &str) -> Result<Option<String>> {
-        if let Some(value_status) = self.memtable.get(key) {
-            return match value_status {
-                ValueStatus::Present(value) => Ok(Some(value.to_owned())),
-                ValueStatus::Tombstone => Ok(None),
-            };
+        if let Some(value) = self.memtable.get(key) {
+            if value == &*TOMBSTONE_VALUE {
+                return Ok(None);
+            }
+            return Ok(Some(value.to_owned()));
         }
 
+
+        //get the biggest element less than or equal to the key
         let mut before = self.sparse_memory_index.range((Unbounded, Included(key.to_owned())));
         let maybe_closest_key = before.next_back();
+
         if maybe_closest_key.is_none() {
             return Ok(None);
         }
 
         let (closest_key, (key_offset, segment_index)) = maybe_closest_key.unwrap();
 
-        let segment = &self.segments[*segment_index];
-        let maybe_value = segment.search_from(key, *key_offset)?;
-
-        if maybe_value.is_some() && maybe_value.as_ref().map(|value| value != &*TOMBSTONE_VALUE).unwrap() {
-            return Ok(maybe_value);
-        }
-        for segment in &self.segments[segment_index + 1..] {
-            let maybe_value = segment.search_from_start(key)?;
+        for index in *segment_index..self.segments.len() {
+            let segment = &mut self.segments[index];
+            let maybe_value = if index == *segment_index { segment.search_from(key, *key_offset)? } else { segment.search_from_start(key)? };
             if maybe_value.is_some() {
-                return Ok(maybe_value);
+                if maybe_value.as_ref().map(|x| x != &*TOMBSTONE_VALUE).unwrap() { return Ok(maybe_value); };
+
+                //if it's marked with a tombstone value, it's a "deleted" key
+                return Ok(None);
             }
         }
 
         Ok(None)
     }
-    pub fn delete(&mut self, key: &str) {
-        self.memtable.delete(key.to_owned());
+    pub fn delete(&mut self, key: &str) -> Result<()> {
+        if self.wal.is_some() {
+            self.wal.as_mut().unwrap().write(KVPair { key: key.to_owned(), value: TOMBSTONE_VALUE.to_string() })?;
+        }
+        self.write(key.to_owned(), TOMBSTONE_VALUE.to_string())?;
+        Ok(())
     }
 }
 
@@ -216,6 +253,7 @@ impl Default for LSMEngine {
 #[cfg(test)]
 mod tests {
     use crate::{LSMEngine, LSMBuilder};
+    use crate::{TOMBSTONE_VALUE};
     use rand::seq::SliceRandom;
     use rand::{SeedableRng};
 
@@ -252,9 +290,13 @@ mod tests {
             .build();
         lsm.write("k1".to_owned(), "v1".to_owned())?;
         lsm.write("k2".to_owned(), "v2".to_owned())?;
-        lsm.delete("k1");
+        lsm.delete("k1")?;
         let value = lsm.read("k1")?;
+
+        dbg!(&value);
+        dbg!(&*TOMBSTONE_VALUE);
         assert!(value.is_none());
+
         Ok(())
     }
 

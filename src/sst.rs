@@ -16,6 +16,8 @@ use thiserror::Error;
 
 use std::cmp::Ordering;
 use std::iter::Peekable;
+use crate::kv::KVPair;
+use std::convert::TryFrom;
 
 
 type Result<T> = std::result::Result<T, SstError>;
@@ -31,6 +33,9 @@ pub enum SstError {
 
     #[error(transparent)]
     JsonParsing(#[from] serde_json::error::Error),
+
+    #[error(transparent)]
+    KvError(#[from] crate::kv::KvError),
 }
 
 pub struct Segment {
@@ -138,7 +143,6 @@ impl<I: Iterator<Item=KVPair>> Iterator for SstMerger<I> {
 pub fn merge<F: FnMut(usize, u64, String) -> ()>(
     segments: Vec<Segment>,
     segment_size: usize,
-    persist: bool,
     mut callback_on_write: F,
 ) -> Result<Vec<Segment>> {
     let segment_timestamps = segments.iter().map(|s| s.created_at).collect::<Vec<_>>();
@@ -157,29 +161,23 @@ pub fn merge<F: FnMut(usize, u64, String) -> ()>(
 
     let merger = SstMerger::new(heap, iterator_with_timestamp);
     let mut res = vec![];
-    let mut segment = if persist { Segment::default() } else { Segment::temp() };
+    let mut segment = Segment::temp();
     let mut segment_count: usize = 0;
 
     for kv in merger.into_iter() {
         if segment.size() == segment_size {
             res.push(segment);
-            segment = if persist { Segment::default() } else { Segment::temp() };
+            segment = Segment::temp();
             segment_count += 1;
         }
         let cloned_key = kv.key.clone();
-        let offset = segment.write(kv.key, kv.value)?;
+        let offset = segment.write(kv)?;
         callback_on_write(segment_count, offset, cloned_key);
     }
     if segment.size() > 0 {
         res.push(segment);
     }
     Ok(res)
-}
-
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
-pub struct KVPair {
-    pub key: String,
-    pub value: String,
 }
 
 impl Segment {
@@ -235,17 +233,12 @@ impl Segment {
         Ok(())
     }
 
-    pub fn write(&mut self, key: String, value: String) -> Result<u64> {
+    pub fn write(&mut self, kv: KVPair) -> Result<u64> {
         //check if the previously written key is bigger than the current key
-        self.validate(&key)?;
-
-        self.previous_key = Some(key.clone());
-
-        let kv = KVPair { key, value };
-
+        self.validate(&kv.key)?;
+        self.previous_key = Some(kv.key.clone());
         let current_offset = self.tell()?;
-
-        serde_json::to_writer(&self.fd, &kv)?;
+        kv.persist_to_file(&mut self.fd)?;
         self.fd.write(b"\n")?;
         self.size += 1;
         return Ok(current_offset);
@@ -311,12 +304,12 @@ impl Segment {
     pub fn read(&self) -> impl Iterator<Item=KVPair> + '_ {
         let reader = BufReader::new(&self.fd);
         return reader.lines().map(|string| {
-            serde_json::from_str::<KVPair>(
-                &string.expect("the segment file should not be tampered with"),
-            )
+            KVPair::try_from(string.expect("the segment file should not be tampered with"))
                 .expect("something went wrong deserializing the contents of the segment file")
         });
     }
+
+
     pub fn read_from_start(&self) -> Result<impl Iterator<Item=KVPair> + '_> {
         self.reset()?;
         return Ok(self.read());
@@ -326,14 +319,15 @@ impl Segment {
 #[cfg(test)]
 mod tests {
     use crate::sst::{merge, Segment};
+    use crate::kv::KVPair;
 
     extern crate tempfile;
 
     #[test]
     fn test_search() -> Result<(), Box<dyn std::error::Error>> {
         let mut sst = Segment::with_file(tempfile::tempfile()?);
-        sst.write("k1".to_owned(), "v1".to_owned())?;
-        sst.write("k2".to_owned(), "v2".to_owned())?;
+        sst.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
+        sst.write(KVPair { key: "k2".to_owned(), value: "v2".to_owned() })?;
         assert_eq!(Some("v2".to_owned()), sst.search_from_start("k2")?);
         Ok(())
     }
@@ -341,7 +335,7 @@ mod tests {
     #[test]
     fn test_peek() -> Result<(), Box<dyn std::error::Error>> {
         let mut sst = Segment::with_file(tempfile::tempfile()?);
-        sst.write("k1".to_owned(), "v1".to_owned())?;
+        sst.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
         sst.reset()?;
         let x = sst.peek()?;
         let y = sst.peek()?;
@@ -352,9 +346,9 @@ mod tests {
     #[test]
     fn test_seek() -> Result<(), Box<dyn std::error::Error>> {
         let mut sst = Segment::with_file(tempfile::tempfile()?);
-        let first_offset = sst.write("k1".to_owned(), "v1".to_owned())?;
-        let second_offset = sst.write("k2".to_owned(), "v2".to_owned())?;
-        sst.write("k3".to_owned(), "v3".to_owned())?;
+        let first_offset = sst.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
+        let second_offset = sst.write(KVPair { key: "k2".to_owned(), value: "v2".to_owned() })?;
+        sst.write(KVPair { key: "k3".to_owned(), value: "v3".to_owned() })?;
 
         sst.seek(first_offset)?;
         let first = sst.read().take(1).last();
@@ -370,8 +364,8 @@ mod tests {
     #[test]
     fn test_read() -> Result<(), Box<dyn std::error::Error>> {
         let mut sst = Segment::with_file(tempfile::tempfile()?);
-        sst.write("k1".to_owned(), "v1".to_owned())?;
-        sst.write("k2".to_owned(), "v2".to_owned())?;
+        sst.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
+        sst.write(KVPair { key: "k2".to_owned(), value: "v2".to_owned() })?;
         let iterator = &mut sst.read_from_start()?;
 
         let first = iterator.next();
@@ -387,15 +381,15 @@ mod tests {
     #[test]
     fn test_interspersed_seek_and_search() -> Result<(), Box<dyn std::error::Error>> {
         let mut sst = Segment::with_file(tempfile::tempfile()?);
-        let first_offset = sst.write("k1".to_owned(), "v1".to_owned())?;
-        sst.write("k2".to_owned(), "v2".to_owned())?;
+        let first_offset = sst.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
+        sst.write(KVPair { key: "k2".to_owned(), value: "v2".to_owned() })?;
         let value_v1 = sst.at(first_offset)?;
         let value = sst.search_from_start("k2")?;
 
         assert_eq!(value, Some("v2".to_owned()));
         assert_eq!(value_v1, Some("v1".to_owned()));
 
-        sst.write("k3".to_owned(), "v3".to_owned())?;
+        sst.write(KVPair { key: "k3".to_owned(), value: "v3".to_owned() })?;
         for k in vec!["k1", "k2", "k3"] {
             assert!(sst.search_from_start(k)?.is_some());
         }
@@ -405,9 +399,9 @@ mod tests {
     #[test]
     fn test_search_range() -> Result<(), Box<dyn std::error::Error>> {
         let mut sst = Segment::with_file(tempfile::tempfile()?);
-        let offset_1 = sst.write("k1".to_owned(), "v1".to_owned())?;
-        let offset_2 = sst.write("k2".to_owned(), "v2".to_owned())?;
-        sst.write("k3".to_owned(), "v3".to_owned())?;
+        let offset_1 = sst.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
+        let offset_2 = sst.write(KVPair { key: "k2".to_owned(), value: "v2".to_owned() })?;
+        sst.write(KVPair { key: "k3".to_owned(), value: "v3".to_owned() })?;
 
         for key in vec!["k2", "k3"] {
             assert!(sst.search_from(key, offset_2)?.is_some());
@@ -419,19 +413,19 @@ mod tests {
     #[test]
     fn test_unsorted_writes() {
         let mut sst = Segment::with_file(tempfile::tempfile().unwrap());
-        sst.write("k2".to_owned(), "v2".to_owned()).unwrap();
-        let result = sst.write("k1".to_owned(), "v1".to_owned());
+        sst.write(KVPair { key: "k2".to_owned(), value: "v2".to_owned() }).unwrap();
+        let result = sst.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() });
         assert!(result.is_err());
     }
 
     #[test]
     fn test_merges() -> Result<(), Box<dyn std::error::Error>> {
         let mut sst_1 = Segment::temp();
-        sst_1.write("k1".to_owned(), "v1".to_owned())?;
+        sst_1.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
         let mut sst_2 = Segment::temp();
-        sst_2.write("k2".to_owned(), "v2".to_owned())?;
+        sst_2.write(KVPair { key: "k2".to_owned(), value: "v2".to_owned() })?;
         let v = vec![sst_1, sst_2];
-        let mut merged = merge(v, 20, false, |index, offset, _| {})?;
+        let mut merged = merge(v, 20,  |index, offset, _| {})?;
         assert_eq!(merged.len(), 1);
         let segment = merged.pop().unwrap();
         let pairs: Vec<_> = segment
@@ -450,14 +444,15 @@ mod tests {
         Ok(())
     }
 
+
     #[test]
     fn test_merge_with_same_keys_different_timestamps() -> Result<(), Box<dyn std::error::Error>> {
         let mut sst_1 = Segment::temp();
         let mut sst_2 = Segment::temp();
-        sst_1.write("k1".to_owned(), "v1".to_owned())?;
-        sst_2.write("k1".to_owned(), "v2".to_owned())?;
+        sst_1.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
+        sst_2.write(KVPair { key: "k1".to_owned(), value: "v2".to_owned() })?;
         let v = vec![sst_1, sst_2];
-        let merged = merge(v, 100, false, |index, offset, _| {})?;
+        let merged = merge(v, 100,  |index, offset, _| {})?;
         let expected = vec![("k1".to_owned(), "v2".to_owned())];
         let actual: Vec<_> = merged[0].read_from_start()?.map(|kv| (kv.key, kv.value)).collect();
         assert_eq!(expected, actual);
