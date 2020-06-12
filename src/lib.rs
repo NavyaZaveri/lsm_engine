@@ -118,9 +118,8 @@ impl LSMEngine {
     fn merge_segments(&mut self) -> Result<()> {
         self.sparse_memory_index.clear();
         let mut count = 0;
-        self.segments = sst::merge(std::mem::take(&mut self.segments), self.segment_size,
+        self.segments = sst::merge(std::mem::take(&mut self.segments), self.segment_size, self.persist_data,
                                    |segment_index, key_offset, key| {
-
                                        if count % self.sparse_offset == 0 {
                                            self.sparse_memory_index.insert(key, (key_offset, segment_index));
                                        }

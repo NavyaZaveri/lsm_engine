@@ -137,6 +137,7 @@ impl<I: Iterator<Item=KVPair>> Iterator for SstMerger<I> {
 pub fn merge<F: FnMut(usize, u64, String) -> ()>(
     segments: Vec<Segment>,
     segment_size: usize,
+    persist: bool,
     mut callback_on_write: F,
 ) -> Result<Vec<Segment>> {
     let segment_timestamps = segments.iter().map(|s| s.created_at).collect::<Vec<_>>();
@@ -155,13 +156,13 @@ pub fn merge<F: FnMut(usize, u64, String) -> ()>(
 
     let merger = SstMerger::new(heap, iterator_with_timestamp);
     let mut res = vec![];
-    let mut segment = Segment::temp();
+    let mut segment = if persist { Segment::default() } else { Segment::temp() };
     let mut segment_count: usize = 0;
 
     for kv in merger.into_iter() {
         if segment.size() == segment_size {
             res.push(segment);
-            segment = Segment::default();
+            segment = if persist { Segment::default() } else { Segment::temp() };
             segment_count += 1;
         }
         let cloned_key = kv.key.clone();
@@ -429,7 +430,7 @@ mod tests {
         let mut sst_2 = Segment::temp();
         sst_2.write("k2".to_owned(), "v2".to_owned())?;
         let v = vec![sst_1, sst_2];
-        let mut merged = merge(v, 20, |index, offset, _| {})?;
+        let mut merged = merge(v, 20, false,|index, offset, _| {})?;
         assert_eq!(merged.len(), 1);
         let segment = merged.pop().unwrap();
         let pairs: Vec<_> = segment
@@ -455,7 +456,7 @@ mod tests {
         sst_1.write("k1".to_owned(), "v1".to_owned())?;
         sst_2.write("k1".to_owned(), "v2".to_owned())?;
         let v = vec![sst_1, sst_2];
-        let merged = merge(v, 100, |index, offset, _| {})?;
+        let merged = merge(v, 100, false,|index, offset, _| {})?;
         let expected = vec![("k1".to_owned(), "v2".to_owned())];
         let actual: Vec<_> = merged[0].read_from_start()?.map(|kv| (kv.key, kv.value)).collect();
         assert_eq!(expected, actual);
