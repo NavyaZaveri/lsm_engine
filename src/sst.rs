@@ -29,7 +29,7 @@ pub enum SstError {
     Disconnect(#[from] io::Error),
 
     #[error(transparent)]
-    JSON_PARSING(#[from] serde_json::error::Error),
+    JsonParsing(#[from] serde_json::error::Error),
 }
 
 pub struct Segment {
