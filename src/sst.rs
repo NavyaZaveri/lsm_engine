@@ -161,7 +161,7 @@ pub fn merge<F: FnMut(usize, u64, String) -> ()>(
     for kv in merger.into_iter() {
         if segment.size() == segment_size {
             res.push(segment);
-            segment = Segment::temp();
+            segment = Segment::default();
             segment_count += 1;
         }
         let cloned_key = kv.key.clone();

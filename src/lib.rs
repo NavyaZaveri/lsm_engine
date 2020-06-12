@@ -15,6 +15,7 @@ lazy_static! {
     static ref TOMBSTONE_VALUE: &'static str = "TOMBSTONE"; //TODO: change this
 }
 
+
 type key_offset = u64;
 type segment_index = usize;
 
@@ -35,6 +36,7 @@ pub struct LSMEngine {
     sparse_offset: usize,
 }
 
+
 pub struct LSMBuilder {
     persist_data: bool,
     segment_size: usize,
@@ -46,10 +48,10 @@ pub struct LSMBuilder {
 impl LSMBuilder {
     pub fn new() -> LSMBuilder {
         return Self {
-            persist_data: false,
-            segment_size: 1000,
-            sparse_offset: 20,
-            inmemory_capacity: 50,
+            persist_data: true,
+            segment_size: 1500,
+            sparse_offset: 35,
+            inmemory_capacity: 500,
         };
     }
 
@@ -83,14 +85,14 @@ impl LSMEngine {
             panic!("segment size {} cannot be less than in-memory capacity {}", segment_size, inmemory_capacity)
         }
 
-        return LSMEngine {
+        LSMEngine {
             memtable: Memtable::new(inmemory_capacity),
             segments: Vec::new(),
             sparse_memory_index: BTreeMap::new(),
             persist_data,
-            segment_size: segment_size,
-            sparse_offset: sparse_offset,
-        };
+            segment_size,
+            sparse_offset,
+        }
     }
 
     fn flush_memtable(&mut self) -> Result<Segment> {
@@ -114,11 +116,11 @@ impl LSMEngine {
 
 
     fn merge_segments(&mut self) -> Result<()> {
-        //merge and update the sparse table
         self.sparse_memory_index.clear();
         let mut count = 0;
         self.segments = sst::merge(std::mem::take(&mut self.segments), self.segment_size,
                                    |segment_index, key_offset, key| {
+
                                        if count % self.sparse_offset == 0 {
                                            self.sparse_memory_index.insert(key, (key_offset, segment_index));
                                        }
@@ -153,12 +155,20 @@ impl LSMEngine {
         if maybe_closest_key.is_none() {
             return Ok(None);
         }
+
         let (closest_key, (key_offset, segment_index)) = maybe_closest_key.unwrap();
+
         let segment = &self.segments[*segment_index];
         let maybe_value = segment.search_from(key, *key_offset)?;
 
         if maybe_value.is_some() && maybe_value.as_ref().map(|value| value != &TOMBSTONE_VALUE.to_string()).unwrap() {
             return Ok(maybe_value);
+        }
+        for segment in &self.segments[segment_index + 1..] {
+            let maybe_value = segment.search_from_start(key)?;
+            if maybe_value.is_some() {
+                return Ok(maybe_value);
+            }
         }
 
         Ok(None)
@@ -168,9 +178,21 @@ impl LSMEngine {
     }
 }
 
+impl Default for LSMEngine {
+    fn default() -> Self {
+        return LSMBuilder::new().build();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{LSMEngine, LSMBuilder};
+    use rand::seq::SliceRandom;
+    use rand::{Rng, SeedableRng};
+
+    use rand::rngs::StdRng;
+    use std::collections::{HashMap};
+
 
     #[test]
     fn it_works() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -215,6 +237,7 @@ mod tests {
             inmemory_capacity(1).
             sparse_offset(2).
             build();
+
         lsm.write("k1".to_owned(), "v1".to_owned())?;
         lsm.write("k2".to_owned(), "k2".to_owned())?;
         lsm.write("k1".to_owned(), "v_1_1".to_owned())?;
@@ -222,6 +245,29 @@ mod tests {
 
         let value = lsm.read("k1")?;
         assert_eq!(value, Some("v_1_1".to_owned()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_on_large_dataset() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut lsm = LSMEngine::default();
+        let dataset: Vec<_> = (0..5000).map(|i| ("k".to_owned() + &i.to_string(), "v".to_owned() + &i.to_string())).collect();
+        let mut rng: StdRng = SeedableRng::seed_from_u64(20);
+        let mut seen = HashMap::new();
+
+
+        for (k, v) in dataset.iter() {
+            lsm.write(k.clone(), v.clone())?;
+            seen.insert(k, v.clone());
+
+            let (random_key, random_value) = dataset.choose(&mut rng).unwrap();
+            let mut value = None;
+
+            if seen.contains_key(random_key) {
+                value = seen.get(random_key);
+            }
+            assert_eq!(lsm.read(random_key)?.as_ref(), value);
+        }
 
         Ok(())
     }
