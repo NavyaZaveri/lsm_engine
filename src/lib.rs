@@ -48,7 +48,7 @@ pub struct LSMBuilder {
 impl LSMBuilder {
     pub fn new() -> LSMBuilder {
         return Self {
-            persist_data: true,
+            persist_data: false,
             segment_size: 1500,
             sparse_offset: 35,
             inmemory_capacity: 500,
