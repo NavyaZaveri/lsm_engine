@@ -1,5 +1,5 @@
 [package]
-name = "lsm-engine"
+name = "lsm_engine"
 version = "0.1.0"
 authors = ["NavyaZaveri <navyajayesh+1@gmail.com>"]
 edition = "2018"

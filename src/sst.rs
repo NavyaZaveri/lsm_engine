@@ -6,7 +6,7 @@ use binary_heap_plus::*;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::time::Instant;
 use std::time::SystemTime;
 
@@ -23,6 +23,7 @@ type Result<T> = std::result::Result<T, SstError>;
 #[derive(Error, Debug)]
 pub enum SstError {
     #[error("Attempted to write {} but previous key is {}", current, previous)]
+
     UnsortedWrite { previous: String, current: String },
 
     #[error(transparent)]
@@ -420,7 +421,7 @@ mod tests {
         let mut sst = Segment::with_file(tempfile::tempfile().unwrap());
         sst.write("k2".to_owned(), "v2".to_owned()).unwrap();
         let result = sst.write("k1".to_owned(), "v1".to_owned());
-        assert!(result.is_err())
+        assert!(result.is_err());
     }
 
     #[test]
@@ -430,7 +431,7 @@ mod tests {
         let mut sst_2 = Segment::temp();
         sst_2.write("k2".to_owned(), "v2".to_owned())?;
         let v = vec![sst_1, sst_2];
-        let mut merged = merge(v, 20, false,|index, offset, _| {})?;
+        let mut merged = merge(v, 20, false, |index, offset, _| {})?;
         assert_eq!(merged.len(), 1);
         let segment = merged.pop().unwrap();
         let pairs: Vec<_> = segment
@@ -456,7 +457,7 @@ mod tests {
         sst_1.write("k1".to_owned(), "v1".to_owned())?;
         sst_2.write("k1".to_owned(), "v2".to_owned())?;
         let v = vec![sst_1, sst_2];
-        let merged = merge(v, 100, false,|index, offset, _| {})?;
+        let merged = merge(v, 100, false, |index, offset, _| {})?;
         let expected = vec![("k1".to_owned(), "v2".to_owned())];
         let actual: Vec<_> = merged[0].read_from_start()?.map(|kv| (kv.key, kv.value)).collect();
         assert_eq!(expected, actual);

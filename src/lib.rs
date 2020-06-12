@@ -1,9 +1,33 @@
+//! A rust implementation of a [Log Structured Merge Tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree#:~:text=In%20computer%20science%2C%20the%20log,%2C%20maintain%20key%2Dvalue%20pairs.)
+//! ### Example Usage
+//!  ```
+//! use lsm_engine::{LSMEngine, LSMBuilder} ;
+//! fn main() -> Result<(), Box< dyn std::error::Error>> {
+//!
+//!    let mut lsm = LSMBuilder::new().
+//!    persist_data(false).
+ //!   segment_size(2).
+ //!   inmemory_capacity(1).
+ //!   sparse_offset(2).
+ //!   build();
+//! lsm.write("k1".to_owned(), "v1".to_owned())?;
+//! lsm.write("k2".to_owned(), "k2".to_owned())?;
+//! lsm.write("k1".to_owned(), "v_1_1".to_owned())?;
+//! lsm.write("k3".to_owned(), "v3".to_owned())?;
+//! let value = lsm.read("k1")?;
+//! assert_eq!(value, Some("v_1_1".to_owned()));
+//! Ok(())
+//! }
+//! ```
+//!
+
 use crate::memtable::{Memtable, ValueStatus};
 use crate::sst::{Segment};
 use std::collections::BTreeMap;
 use std::ops::Bound::{Included, Unbounded};
-
+use rand::Rng;
 use thiserror::Error;
+use rand::distributions::Alphanumeric;
 
 #[macro_use]
 extern crate lazy_static;
@@ -12,12 +36,12 @@ mod memtable;
 mod sst;
 
 lazy_static! {
-    static ref TOMBSTONE_VALUE: &'static str = "TOMBSTONE"; //TODO: change this
+    static ref TOMBSTONE_VALUE:String = rand::thread_rng().sample_iter(&Alphanumeric).take(20).collect::<String>(); //TODO: change this
 }
 
 
-type key_offset = u64;
-type segment_index = usize;
+type KeyOffset = u64;
+type SegmentIndex = usize;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -25,14 +49,14 @@ pub enum Error {
     SstError(#[from] sst::SstError),
 }
 
-type Result<T> = std::result::Result<T, self::Error>;
+pub type Result<T> = std::result::Result<T, self::Error>;
 
 pub struct LSMEngine {
     memtable: Memtable<String, String>,
     segments: Vec<Segment>,
     persist_data: bool,
     segment_size: usize,
-    sparse_memory_index: BTreeMap<String, (key_offset, segment_index)>,
+    sparse_memory_index: BTreeMap<String, (KeyOffset, SegmentIndex)>,
     sparse_offset: usize,
 }
 
@@ -160,7 +184,7 @@ impl LSMEngine {
         let segment = &self.segments[*segment_index];
         let maybe_value = segment.search_from(key, *key_offset)?;
 
-        if maybe_value.is_some() && maybe_value.as_ref().map(|value| value != &TOMBSTONE_VALUE.to_string()).unwrap() {
+        if maybe_value.is_some() && maybe_value.as_ref().map(|value| value != &*TOMBSTONE_VALUE).unwrap() {
             return Ok(maybe_value);
         }
         for segment in &self.segments[segment_index + 1..] {
@@ -187,7 +211,7 @@ impl Default for LSMEngine {
 mod tests {
     use crate::{LSMEngine, LSMBuilder};
     use rand::seq::SliceRandom;
-    use rand::{Rng, SeedableRng};
+    use rand::{SeedableRng};
 
     use rand::rngs::StdRng;
     use std::collections::{HashMap};
