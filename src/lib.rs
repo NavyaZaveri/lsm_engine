@@ -8,7 +8,7 @@
 //!
 //!    let mut lsm = LSMBuilder::new().
 //!          persist_data(false). // don't create a "write-ahead log"
- //!         segment_size(2000). // each sst file will have up to 2000 entries"
+ //!         segment_size(2000). // each sst file will have up to 2000 entries
  //!         inmemory_capacity(100). //store only 100 entries in memory
  //!         sparse_offset(20). //store one out of every 20 entries written into segments in memory
  //!         build();
