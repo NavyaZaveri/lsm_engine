@@ -34,7 +34,7 @@ use std::ops::Bound::{Included, Unbounded};
 use rand::Rng;
 use thiserror::Error;
 use rand::distributions::Alphanumeric;
-use crate::kv::KVPair;
+use crate::kv::{KVPair, KVFileWriter, KVFileReader};
 use crate::wal::Wal;
 use std::fs::{File, OpenOptions};
 use std::path::Path;
@@ -153,7 +153,7 @@ impl LSMEngine {
     fn recover_from(&mut self, wal_file: File) -> Result<()> {
         self.clear();
         let wal_file = Wal::new(wal_file);
-        for maybe_kv in wal_file.readall() {
+        for maybe_kv in wal_file.read_from_start()? {
             let kv = maybe_kv?;
             self.write(kv.key, kv.value)?;
         }
@@ -190,7 +190,7 @@ impl LSMEngine {
 
     pub fn write(&mut self, key: String, value: String) -> Result<()> {
         if self.wal.is_some() {
-            self.wal.as_mut().unwrap().write(KVPair { key: key.clone(), value: value.clone() })?;
+            self.wal.as_mut().unwrap().persist(KVPair { key: key.clone(), value: value.clone() })?;
         }
         if self.memtable.at_capacity() && !self.memtable.contains(&key) {
             let new_segment = self.flush_memtable()?;
@@ -238,7 +238,7 @@ impl LSMEngine {
     }
     pub fn delete(&mut self, key: &str) -> Result<()> {
         if self.wal.is_some() {
-            self.wal.as_mut().unwrap().write(KVPair { key: key.to_owned(), value: TOMBSTONE_VALUE.to_string() })?;
+            self.wal.as_mut().unwrap().persist(KVPair { key: key.to_owned(), value: TOMBSTONE_VALUE.to_string() })?;
         }
         self.write(key.to_owned(), TOMBSTONE_VALUE.to_string())?;
         Ok(())

@@ -1,44 +1,46 @@
 use std::fs::File;
-use crate::kv::KVPair;
-use std::io::{BufReader, BufRead, Write};
+use crate::kv::{KVPair, KVFileWriter, KVFileIterator, KVFileReader};
+use std::io::{BufReader, BufRead, Write, SeekFrom, Seek};
 use serde_json;
 use std::convert::TryFrom;
 
 #[macro_use]
 use thiserror::Error;
 use crate::kv;
+use std::cell::RefCell;
+use std::io;
 
 
 pub struct Wal {
-    file: File
+    pub file: File
 }
 
-type Result<T> = std::result::Result<T, WalError>;
+pub type Result<T> = std::result::Result<T, WalError>;
 
 
 #[derive(Error, Debug)]
 pub enum WalError {
     #[error(transparent)]
-    WriteError(#[from] kv::KvError)
+    WriteError(#[from] kv::KvError),
+
+    #[error("Unable to seek to the start of the file")]
+    SeekError(#[from] io::Error),
 }
+
+impl KVFileIterator for Wal {
+    fn file(&self) -> &mut File {
+        return RefCell::new(self).borrow_mut().file();
+    }
+}
+
+impl KVFileReader for Wal {}
+
+impl KVFileWriter for Wal {}
 
 impl Wal {
     pub fn new(f: File) -> Self {
         return Wal {
             file: f
         };
-    }
-    pub fn write(&mut self, kv: KVPair) -> Result<()> {
-        kv.persist_to_file(&mut self.file)?;
-        Ok(())
-    }
-
-    pub fn readall(&self) -> impl Iterator<Item=std::result::Result<KVPair, kv::KvError>> + '_ {
-        let reader = BufReader::new(&self.file);
-        return reader.lines().map(|string| {
-            return KVPair::try_from(
-                string.expect("the segment file should not be tampered with"),
-            );
-        });
     }
 }
