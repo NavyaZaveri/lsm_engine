@@ -1,7 +1,6 @@
 //!
 //! A rust implementation of a key-value store using [Log Structured Merge Trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree#:~:text=In%20computer%20science%2C%20the%20log,%2C%20maintain%20key%2Dvalue%20pairs.)
 //!
-
 //!
 //!
 //! ## Example Usage
@@ -39,13 +38,16 @@
 //!
 //! ### Read
 //! When a request for a read is made, the following happens:
-//! * It first checks its internal memtable for the value corresponding to the requested key.
+//! * It first checks its internal memtable for the value corresponding to the requested key. If it exists, it returns the value
 //! * Otherwise, it looks up the offset of the closest key with its sparse mememory index. This is a balanced tree that maintains
 //! that position of  1 out of every `sparse_offset` entries in memeory.
 //! * It then linearly scans forward from that offset, looking for the desired key-value entry.
 //!
 //! ### Delete
 //! This is just a special case of write, with value being a special tombstone string.
+//!
+//! For more details with visual illustrations, check out my [blog post](https://navyazaveri.github.io/algorithms/2020/01/12/write-a-kv-store-from-scratch.html)
+//!
 
 use crate::memtable::{Memtable};
 use crate::sst::{Segment};
@@ -230,9 +232,9 @@ impl LSMEngine {
         Ok(())
     }
 
-    ///Unfortunately this is marked as mutable ti relies on rust's seek api which is also
-    /// mutable. In the future, this might chane to immutable if the seek api changes
-    /// or it the issue becomes significant enough to warrant  wrapping the file with `Rc<RefCell<>>`
+    ///Unfortunately this is marked as mutable since relies on rust's seek api, which is also
+    /// mutable. In the future, this might change to immutable if the seek api changes
+    /// or it the issue becomes significant enough to warrant  using `Rc<RefCell<>>`
     pub fn read(&mut self, key: &str) -> Result<Option<String>> {
         if let Some(value) = self.memtable.get(key) {
             if value == &*TOMBSTONE_VALUE {
@@ -242,7 +244,7 @@ impl LSMEngine {
         }
 
 
-//get the biggest element less than or equal to the key
+        //get the biggest element less than or equal to the key
         let mut before = self.sparse_memory_index.range((Unbounded, Included(key.to_owned())));
         let maybe_closest_key = before.next_back();
 
@@ -258,7 +260,7 @@ impl LSMEngine {
             if maybe_value.is_some() {
                 if maybe_value.as_ref().map(|x| x != &*TOMBSTONE_VALUE).unwrap() { return Ok(maybe_value); };
 
-//if it's marked with a tombstone value, it's a "deleted" key
+                //if it's marked with a tombstone value, it's a "deleted" key
                 return Ok(None);
             }
         }
