@@ -12,4 +12,4 @@ lsm_engine = "*"
 ```
 
 ### Docs 
-https://docs.rs/lfu/0.2.3/lfu/
+https://docs.rs/lsm_engine/0.1.1/lsm_engine/
