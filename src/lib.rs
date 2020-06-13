@@ -37,6 +37,7 @@ use rand::distributions::Alphanumeric;
 use crate::kv::KVPair;
 use crate::wal::Wal;
 use std::fs::{File, OpenOptions};
+use std::path::Path;
 
 
 #[macro_use]
@@ -112,7 +113,7 @@ impl LSMBuilder {
         self.sparse_offset = sparse_offset;
         return self;
     }
-    pub fn wal_filename(mut self, path: String) -> Self {
+    pub fn wal_path<P: AsRef<Path>>(mut self, path: P) -> Self {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -340,6 +341,31 @@ mod tests {
             assert_eq!(lsm.read(random_key)?.as_ref(), value);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_recovery_with_wal() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut lsm = LSMBuilder::new().wal_path("foo").build();
+        let dataset: Vec<_> = (0..20).map(|i| ("k".to_owned() + &i.to_string(), "v".to_owned() + &i.to_string())).collect();
+        for (key, v) in dataset.iter() {
+            lsm.write(key.to_string(), v.to_string())?;
+        }
+        for i in 10..dataset.len() {
+            let (k, v) = &dataset[i];
+            lsm.delete(k)?;
+        }
+        let new_lsm = LSMBuilder::new();
+        for i in 0..10 {
+            let (k, v) = &dataset[i];
+            assert_eq!(lsm.read(k)?, Some(v.to_owned()));
+        }
+
+        for i in 10..dataset.len() {
+            let (k, v) = &dataset[i];
+            assert_eq!(lsm.read(k)?, None);
+        }
+        std::fs::remove_file("foo")?;
         Ok(())
     }
 }
