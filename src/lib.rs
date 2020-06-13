@@ -58,6 +58,9 @@ use crate::kv::{KVPair, KVFileWriter, KVFileReader};
 use crate::wal::Wal;
 use std::fs::{File, OpenOptions};
 use std::path::Path;
+use rand::{SeedableRng};
+
+use rand::rngs::StdRng;
 
 
 #[macro_use]
@@ -69,7 +72,11 @@ mod sst;
 mod wal;
 mod kv;
 lazy_static! {
-    static ref TOMBSTONE_VALUE:String = rand::thread_rng().sample_iter(&Alphanumeric).take(20).collect::<String>(); //TODO: make this deterministic!!
+
+static ref TOMBSTONE_VALUE: String = {
+    let rng:StdRng = SeedableRng::seed_from_u64(20);
+    rng.sample_iter(&Alphanumeric).take(20).collect::<String>()
+    };
 }
 
 
@@ -80,7 +87,6 @@ type SegmentIndex = usize;
 pub enum Error {
     #[error(transparent)]
     SstError(#[from] sst::SstError),
-
     #[error(transparent)]
     KvError(#[from] kv::KvError),
 }
@@ -213,7 +219,7 @@ impl LSMEngine {
         if self.wal.is_some() {
             self.wal.as_mut().unwrap().persist(KVPair { key: key.clone(), value: value.clone() })?;
         }
-        if self.memtable.at_capacity() && !self.memtable.contains(&key) {
+        if self.memtable.at_capacity() & &!self.memtable.contains(&key) {
             let new_segment = self.flush_memtable()?;
             self.segments.push(new_segment);
             self.memtable.insert(key, value);
@@ -236,7 +242,7 @@ impl LSMEngine {
         }
 
 
-        //get the biggest element less than or equal to the key
+//get the biggest element less than or equal to the key
         let mut before = self.sparse_memory_index.range((Unbounded, Included(key.to_owned())));
         let maybe_closest_key = before.next_back();
 
@@ -252,7 +258,7 @@ impl LSMEngine {
             if maybe_value.is_some() {
                 if maybe_value.as_ref().map(|x| x != &*TOMBSTONE_VALUE).unwrap() { return Ok(maybe_value); };
 
-                //if it's marked with a tombstone value, it's a "deleted" key
+//if it's marked with a tombstone value, it's a "deleted" key
                 return Ok(None);
             }
         }
@@ -269,7 +275,7 @@ impl LSMEngine {
 
     fn contains(&mut self, key: &str) -> Result<bool> {
 
-        //TODO: use a scalable bloom filter for faster lookups
+//TODO: use a scalable bloom filter for faster lookups
         let maybe_value = self.read(key)?;
         return Ok(maybe_value.is_some());
     }
