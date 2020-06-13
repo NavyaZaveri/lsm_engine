@@ -1,9 +1,10 @@
-//! 
-//! A rust implementation of a [Log Structured Merge Tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree#:~:text=In%20computer%20science%2C%20the%20log,%2C%20maintain%20key%2Dvalue%20pairs.)
-//! ### Install
+    //!
+//! A rust implementation of a key-value store using [Log Structured Merge Trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree#:~:text=In%20computer%20science%2C%20the%20log,%2C%20maintain%20key%2Dvalue%20pairs.)
+//!
+
 //!
 //!
-//! ### Example Usage
+//! ## Example Usage
 //!  ```
 //! use lsm_engine::{LSMEngine, LSMBuilder} ;
 //! fn main() -> Result<(), Box< dyn std::error::Error>> {
@@ -18,14 +19,33 @@
 //!     lsm.write("k1".to_owned(), "v1".to_owned())?;
 //!     lsm.write("k2".to_owned(), "k2".to_owned())?;
 //!     lsm.write("k1".to_owned(), "v_1_1".to_owned())?;
-//!     lsm.write("k3".to_owned(), "v3".to_owned())?;
 //!     let value = lsm.read("k1")?;
 //!     assert_eq!(value, Some("v_1_1".to_owned()));
 //!     Ok(())
 //! }
 //! ```
-//! ### Design
+//! ## Design
 //!
+//! This is an embedded  key-value store that uses LSM-trees and leverages a [Write-Ahead log](https://en.wikipedia.org/wiki/Write-ahead_logging) (WAL) file for
+//! data recovery.
+//!
+//! The basic architecture is illustrated below:
+//!
+//! ### Write
+//! When a write comes in, the following happens
+//! * The entry is written into the WAL file (unless an explicit request is made not to)
+//! * If the size of the internal is at full capacity, the contents are dumped into a segment file, with compaction performed in the end.
+//! * The entry is then inserted into the now-empty memtable.
+//!
+//! ### Read
+//! When a request for a read is made, the following happens:
+//! * It first checks its internal memtable for the value corresponding to the requested key.
+//! * Otherwise, it looks up the offset of the closest key with its sparse mememory index. This is a balanced tree that maintains
+//! that position of  1 out of every `sparse_offset` entries in memeory.
+//! * It then linearly scans forward from that offset, looking for the desired key-value entry.
+//!
+//! ### Delete
+//! This is just a special case of write, with value being a special tombstone key.
 
 use crate::memtable::{Memtable};
 use crate::sst::{Segment};
@@ -42,6 +62,7 @@ use std::path::Path;
 
 #[macro_use]
 extern crate lazy_static;
+
 
 mod memtable;
 mod sst;
@@ -70,11 +91,11 @@ pub type Result<T> = std::result::Result<T, self::Error>;
 pub struct LSMEngine {
     memtable: Memtable<String, String>,
     segments: Vec<Segment>,
-    persist_data: bool,
     segment_size: usize,
     sparse_memory_index: BTreeMap<String, (KeyOffset, SegmentIndex)>,
     sparse_offset: usize,
     wal: Option<Wal>,
+
 }
 
 
@@ -127,12 +148,12 @@ impl LSMBuilder {
         return self;
     }
     pub fn build(self) -> LSMEngine {
-        return LSMEngine::new(self.inmemory_capacity, self.segment_size, self.sparse_offset, self.persist_data, self.wal);
+        return LSMEngine::new(self.inmemory_capacity, self.segment_size, self.sparse_offset, self.wal);
     }
 }
 
 impl LSMEngine {
-    fn new(inmemory_capacity: usize, segment_size: usize, sparse_offset: usize, persist_data: bool, wal: Option<Wal>) -> Self {
+    fn new(inmemory_capacity: usize, segment_size: usize, sparse_offset: usize, wal: Option<Wal>) -> Self {
         if segment_size < inmemory_capacity {
             panic!("segment size {} cannot be less than in-memory capacity {}", segment_size, inmemory_capacity)
         }
@@ -141,12 +162,12 @@ impl LSMEngine {
             memtable: Memtable::new(inmemory_capacity),
             segments: Vec::new(),
             sparse_memory_index: BTreeMap::new(),
-            persist_data,
             segment_size,
             sparse_offset,
             wal,
         }
     }
+
 
     fn recover_from(&mut self, wal_file: File) -> Result<()> {
         self.clear();
@@ -164,6 +185,7 @@ impl LSMEngine {
         self.segments.clear();
         self.sparse_memory_index.clear();
     }
+
 
     fn flush_memtable(&mut self) -> Result<Segment> {
         let mut new_segment = Segment::temp();
@@ -202,7 +224,9 @@ impl LSMEngine {
         Ok(())
     }
 
-
+    ///Unfortunately this is marked as mutable ti relies on rust's seek api which is also
+    /// mutable. In the future, this might chane to immutable if the seek api changes
+    /// or it the issue becomes significant enough to warrant  wrapping the file with `Rc<RefCell<>>`
     pub fn read(&mut self, key: &str) -> Result<Option<String>> {
         if let Some(value) = self.memtable.get(key) {
             if value == &*TOMBSTONE_VALUE {
@@ -241,6 +265,13 @@ impl LSMEngine {
         }
         self.write(key.to_owned(), TOMBSTONE_VALUE.to_string())?;
         Ok(())
+    }
+
+    fn contains(&mut self, key: &str) -> Result<bool> {
+
+        //TODO: use a scalable bloom filter for faster lookups
+        let maybe_value = self.read(key)?;
+        return Ok(maybe_value.is_some());
     }
 }
 
@@ -292,9 +323,6 @@ mod tests {
         lsm.write("k2".to_owned(), "v2".to_owned())?;
         lsm.delete("k1")?;
         let value = lsm.read("k1")?;
-
-        dbg!(&value);
-        dbg!(&*TOMBSTONE_VALUE);
         assert!(value.is_none());
 
         Ok(())
@@ -370,6 +398,16 @@ mod tests {
             assert_eq!(new_lsm.read(k)?, None);
         }
         std::fs::remove_file("foo")?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_contains() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut lsm = LSMBuilder::new().inmemory_capacity(1).build();
+        lsm.write("k1".to_owned(), "v1".to_owned())?;
+        lsm.delete("k1")?;
+        assert_eq!(lsm.contains("k1")?, false);
+        assert_eq!(lsm.contains("k2")?, false);
         Ok(())
     }
 }

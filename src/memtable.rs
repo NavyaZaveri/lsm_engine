@@ -54,6 +54,7 @@ mod tests {
     fn it_works() {
         let mut memtable = Memtable::new(5);
         memtable.insert("k1", "v1");
+        assert_eq!(memtable.get("k1"), Some(&"v1"));
     }
 }
 

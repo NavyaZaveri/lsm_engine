@@ -6,7 +6,6 @@ use std::fs::OpenOptions;
 use std::io::BufReader;
 use std::io::BufRead;
 use std::time::Instant;
-use std::time::SystemTime;
 
 use std::io;
 #[macro_use]
@@ -204,12 +203,6 @@ impl Segment {
     pub fn temp() -> Segment {
         let temp = tempfile::tempfile().unwrap();
         return Segment::with_file(temp);
-    }
-
-    pub fn default() -> Segment {
-        let now = SystemTime::now();
-        let s = format!("{:?}", now);
-        return Segment::new(&s);
     }
 
     pub fn timestamp(&self) -> Instant {

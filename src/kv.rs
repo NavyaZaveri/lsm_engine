@@ -16,14 +16,6 @@ pub struct KVPair {
 }
 
 
-impl KVPair {
-    pub fn persist_to_file(self, file: &mut File) -> Result<()> {
-        serde_json::to_writer(file, &self)?;
-        Ok(())
-    }
-}
-
-
 impl TryFrom<String> for KVPair {
     type Error = KvError;
 
