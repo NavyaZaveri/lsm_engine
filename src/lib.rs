@@ -59,8 +59,6 @@ type SegmentIndex = usize;
 pub enum Error {
     #[error(transparent)]
     SstError(#[from] sst::SstError),
-    #[error(transparent)]
-    WalError(#[from] wal::WalError),
 
     #[error(transparent)]
     KvError(#[from] kv::KvError),

@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use std::cmp::Ordering;
 use std::iter::Peekable;
-use crate::kv::KVPair;
+use crate::kv::{KVPair, KVFileIterator, KVFileWriter};
 use std::convert::TryFrom;
 
 
@@ -44,6 +44,14 @@ pub struct Segment {
     previous_key: Option<String>,
     created_at: Instant,
 }
+
+impl KVFileIterator for Segment {
+    fn file_as_mut(&mut self) -> &mut File {
+        return &mut self.fd;
+    }
+}
+
+impl KVFileWriter for Segment {}
 
 struct MetaKey {
     key: String,
@@ -238,8 +246,7 @@ impl Segment {
         self.validate(&kv.key)?;
         self.previous_key = Some(kv.key.clone());
         let current_offset = self.tell()?;
-        kv.persist_to_file(&mut self.fd)?;
-        self.fd.write(b"\n")?;
+        self.persist(kv);
         self.size += 1;
         return Ok(current_offset);
     }

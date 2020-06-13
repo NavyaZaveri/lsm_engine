@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use std::fs::File;
 use serde::export::TryFrom;
-use std::cell::{RefCell, Ref};
 use std::io::{SeekFrom, Seek, BufReader, BufRead, Write};
 
 
@@ -46,30 +45,30 @@ pub enum KvError {
 }
 
 pub trait KVFileIterator {
-    fn file(&mut self) -> &mut File;
+    fn file_as_mut(&mut self) -> &mut File;
     fn seek(&mut self, pos: u64) -> Result<()> {
-        self.file().seek(SeekFrom::Start(pos))?;
+        self.file_as_mut().seek(SeekFrom::Start(pos))?;
         Ok(())
     }
 
     fn tell(&mut self) -> Result<u64> {
-        let offset = self.file().seek(SeekFrom::Current(0))?;
+        let offset = self.file_as_mut().seek(SeekFrom::Current(0))?;
         return Ok(offset);
     }
 }
 
 pub trait KVFileReader: KVFileIterator {
     fn read(&mut self) -> Box<dyn Iterator<Item=Result<KVPair>> + '_> {
-        let reader = BufReader::new(self.file());
+        let reader = BufReader::new(self.file_as_mut());
 
         return Box::new(reader.lines().map(|string| {
-            KVPair::try_from(string.expect("the segment file should not be tampered with"))
+            KVPair::try_from(string?)
         }));
     }
 
     fn read_from_start(&mut self) -> Result<Box<dyn Iterator<Item=Result<KVPair>> + '_>> {
         self.seek(0)?;
-        let reader = BufReader::new(self.file());
+        let reader = BufReader::new(self.file_as_mut());
         return Ok(Box::new(reader.lines().map(|string| {
             KVPair::try_from(string?)
         })));
@@ -79,8 +78,8 @@ pub trait KVFileReader: KVFileIterator {
 pub trait KVFileWriter: KVFileIterator {
     fn persist(&mut self, kv: KVPair) -> Result<u64> {
         let current_offset = self.tell()?;
-        serde_json::to_writer(self.file(), &kv)?;
-        self.file().write(b"\n")?;
-        return Ok(20);
+        serde_json::to_writer(self.file_as_mut(), &kv)?;
+        self.file_as_mut().write(b"\n")?;
+        return Ok(current_offset);
     }
 }
