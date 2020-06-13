@@ -7,11 +7,13 @@
 //! fn main() -> Result<(), Box< dyn std::error::Error>> {
 //!
 //!    let mut lsm = LSMBuilder::new().
-//!          persist_data(false).
- //!         segment_size(2).
- //!         inmemory_capacity(1).
- //!         sparse_offset(2).
+//!          persist_data(false). // no "write-ahead log" is made
+ //!         segment_size(2000). // each sst file will have up to 2000 entries"
+ //!         inmemory_capacity(100). //store only 100 entries in memory
+ //!         sparse_offset(20). //store one out of every 20 entries written into segments in memory
  //!         build();
+ //!
+ //!    let default_lsm = LSMBuilder::new().build(); //an lsm engine with default parameters
  //!
 //!     lsm.write("k1".to_owned(), "v1".to_owned())?;
 //!     lsm.write("k2".to_owned(), "k2".to_owned())?;
