@@ -34,7 +34,7 @@ use std::ops::Bound::{Included, Unbounded};
 use rand::Rng;
 use thiserror::Error;
 use rand::distributions::Alphanumeric;
-use crate::kv::{KVPair, KVFileWriter, KVFileReader};
+use crate::kv::{KVPair, KVFileWriter, KVFileReader, KvError};
 use crate::wal::Wal;
 use std::fs::{File, OpenOptions};
 use std::path::Path;
@@ -152,7 +152,8 @@ impl LSMEngine {
 
     fn recover_from(&mut self, wal_file: File) -> Result<()> {
         self.clear();
-        let wal_file = Wal::new(wal_file);
+        let mut wal_file = Wal::new(wal_file);
+
         for maybe_kv in wal_file.read_from_start()? {
             let kv = maybe_kv?;
             self.write(kv.key, kv.value)?;
@@ -348,22 +349,27 @@ mod tests {
     fn test_recovery_with_wal() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut lsm = LSMBuilder::new().wal_path("foo").build();
         let dataset: Vec<_> = (0..20).map(|i| ("k".to_owned() + &i.to_string(), "v".to_owned() + &i.to_string())).collect();
+
         for (key, v) in dataset.iter() {
             lsm.write(key.to_string(), v.to_string())?;
         }
+
+
         for i in 10..dataset.len() {
             let (k, v) = &dataset[i];
             lsm.delete(k)?;
         }
-        let new_lsm = LSMBuilder::new();
+
+        let mut new_lsm = LSMBuilder::new().build();
+        new_lsm.recover_from(lsm.wal.unwrap().file)?;
         for i in 0..10 {
             let (k, v) = &dataset[i];
-            assert_eq!(lsm.read(k)?, Some(v.to_owned()));
+            assert_eq!(new_lsm.read(k)?, Some(v.to_owned()));
         }
 
         for i in 10..dataset.len() {
             let (k, v) = &dataset[i];
-            assert_eq!(lsm.read(k)?, None);
+            assert_eq!(new_lsm.read(k)?, None);
         }
         std::fs::remove_file("foo")?;
         Ok(())

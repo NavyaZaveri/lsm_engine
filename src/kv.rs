@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use std::fs::File;
 use serde::export::TryFrom;
-use std::cell::RefCell;
+use std::cell::{RefCell, Ref};
 use std::io::{SeekFrom, Seek, BufReader, BufRead, Write};
 
 
@@ -46,31 +46,28 @@ pub enum KvError {
 }
 
 pub trait KVFileIterator {
-    fn file(&self) -> &mut File;
-    fn seek(&self, pos: u64) -> Result<()> {
-        RefCell::new(self.file())
-            .borrow_mut()
-            .seek(SeekFrom::Start(pos))?;
+    fn file(&mut self) -> &mut File;
+    fn seek(&mut self, pos: u64) -> Result<()> {
+        self.file().seek(SeekFrom::Start(pos))?;
         Ok(())
     }
 
-    fn tell(&self) -> Result<u64> {
-        let offset = RefCell::new(self.file())
-            .borrow_mut()
-            .seek(SeekFrom::Current(0))?;
+    fn tell(&mut self) -> Result<u64> {
+        let offset = self.file().seek(SeekFrom::Current(0))?;
         return Ok(offset);
     }
 }
 
 pub trait KVFileReader: KVFileIterator {
-    fn read(&self) -> Box<dyn Iterator<Item=Result<KVPair>> + '_> {
+    fn read(&mut self) -> Box<dyn Iterator<Item=Result<KVPair>> + '_> {
         let reader = BufReader::new(self.file());
+
         return Box::new(reader.lines().map(|string| {
             KVPair::try_from(string.expect("the segment file should not be tampered with"))
         }));
     }
 
-    fn read_from_start(&self) -> Result<Box<dyn Iterator<Item=Result<KVPair>> + '_>> {
+    fn read_from_start(&mut self) -> Result<Box<dyn Iterator<Item=Result<KVPair>> + '_>> {
         self.seek(0)?;
         let reader = BufReader::new(self.file());
         return Ok(Box::new(reader.lines().map(|string| {
@@ -81,10 +78,9 @@ pub trait KVFileReader: KVFileIterator {
 
 pub trait KVFileWriter: KVFileIterator {
     fn persist(&mut self, kv: KVPair) -> Result<u64> {
-        //check if the previously written key is bigger than the current key
         let current_offset = self.tell()?;
         serde_json::to_writer(self.file(), &kv)?;
         self.file().write(b"\n")?;
-        return Ok(current_offset);
+        return Ok(20);
     }
 }

@@ -28,8 +28,8 @@ pub enum WalError {
 }
 
 impl KVFileIterator for Wal {
-    fn file(&self) -> &mut File {
-        return RefCell::new(self).borrow_mut().file();
+    fn file(&mut self) -> &mut File {
+        return &mut self.file;
     }
 }
 
