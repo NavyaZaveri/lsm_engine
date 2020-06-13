@@ -31,7 +31,7 @@
 //! The basic architecture is illustrated below:
 //!
 //! ### Write
-//! When a write comes in, the following happens
+//! When a write comes in, the following happens:
 //! * The entry is written into the WAL file (unless an explicit request is made not to)
 //! * If the size of the internal is at full capacity, the contents are dumped into a segment file, with compaction performed in the end.
 //! * The entry is then inserted into the now-empty memtable.
@@ -39,14 +39,13 @@
 //! ### Read
 //! When a request for a read is made, the following happens:
 //! * It first checks its internal memtable for the value corresponding to the requested key. If it exists, it returns the value
-//! * Otherwise, it looks up the offset of the closest key with its sparse mememory index. This is a balanced tree that maintains
-//! that position of  1 out of every `sparse_offset` entries in memeory.
+//! * Otherwise, it looks up the offset of the closest key with its sparse memory index. This is a balanced tree that maintains
+//! the position of 1 out of every `sparse_offset` entries in memeory.
 //! * It then linearly scans forward from that offset, looking for the desired key-value entry.
 //!
 //! ### Delete
 //! This is just a special case of write, with value being a special tombstone string.
-//!
-//! For more details with visual illustrations, check out my [blog post](https://navyazaveri.github.io/algorithms/2020/01/12/write-a-kv-store-from-scratch.html)
+//! For more details with visual illustrations, check out this [blog post](https://navyazaveri.github.io/algorithms/2020/01/12/write-a-kv-store-from-scratch.html)
 //!
 
 use crate::memtable::{Memtable};
