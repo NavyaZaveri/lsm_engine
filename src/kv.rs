@@ -51,6 +51,12 @@ pub trait KVFileIterator {
         Ok(())
     }
 
+
+    fn reset(&mut self) -> Result<()> {
+        self.seek(0)?;
+        Ok(())
+    }
+
     fn tell(&mut self) -> Result<u64> {
         let offset = self.file_as_mut().seek(SeekFrom::Current(0))?;
         return Ok(offset);

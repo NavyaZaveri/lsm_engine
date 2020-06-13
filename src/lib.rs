@@ -34,7 +34,7 @@ use std::ops::Bound::{Included, Unbounded};
 use rand::Rng;
 use thiserror::Error;
 use rand::distributions::Alphanumeric;
-use crate::kv::{KVPair, KVFileWriter, KVFileReader, KvError};
+use crate::kv::{KVPair, KVFileWriter, KVFileReader};
 use crate::wal::Wal;
 use std::fs::{File, OpenOptions};
 use std::path::Path;

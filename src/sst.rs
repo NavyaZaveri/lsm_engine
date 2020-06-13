@@ -1,12 +1,10 @@
-#![allow(dead_code)]
-
 use std::fs::File;
 
 use binary_heap_plus::*;
-use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
+
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::io::BufReader;
+use std::io::BufRead;
 use std::time::Instant;
 use std::time::SystemTime;
 
@@ -149,14 +147,14 @@ impl<I: Iterator<Item=KVPair>> Iterator for SstMerger<I> {
 }
 
 pub fn merge<F: FnMut(usize, u64, String) -> ()>(
-    segments: Vec<Segment>,
+    mut segments: Vec<Segment>,
     segment_size: usize,
     mut callback_on_write: F,
 ) -> Result<Vec<Segment>> {
     let segment_timestamps = segments.iter().map(|s| s.created_at).collect::<Vec<_>>();
 
     let iterators = segments
-        .iter()
+        .iter_mut()
         .map(|s| s.read_from_start())
         .map(|maybe_it| maybe_it.map(|it| it.peekable()))
         .collect::<Result<Vec<_>>>()?;
@@ -245,8 +243,7 @@ impl Segment {
         //check if the previously written key is bigger than the current key
         self.validate(&kv.key)?;
         self.previous_key = Some(kv.key.clone());
-        let current_offset = self.tell()?;
-        self.persist(kv);
+        let current_offset = self.persist(kv)?;
         self.size += 1;
         return Ok(current_offset);
     }
@@ -255,7 +252,7 @@ impl Segment {
         return self.size;
     }
 
-    pub fn at(&self, pos: u64) -> Result<Option<String>> {
+    pub fn at(&mut self, pos: u64) -> Result<Option<String>> {
         let current = self.tell()?;
         self.seek(pos)?;
         let value = self.read().take(1).last().map(|kv| kv.value);
@@ -264,22 +261,7 @@ impl Segment {
     }
 
 
-    fn seek(&self, pos: u64) -> Result<()> {
-        RefCell::new(&self.fd)
-            .borrow_mut()
-            .seek(SeekFrom::Start(pos))?;
-        Ok(())
-    }
-
-    fn peek(&self) -> Result<Option<KVPair>> {
-        let current = self.tell()?;
-        let maybe_entry = self.read().take(1).last();
-
-        self.seek(current)?;
-        Ok(maybe_entry)
-    }
-
-    pub fn search_from(&self, key: &str, offset: u64) -> Result<Option<String>> {
+    pub fn search_from(&mut self, key: &str, offset: u64) -> Result<Option<String>> {
         let current_pos = self.tell()?;
         self.seek(offset)?;
         let maybe_value = self
@@ -292,20 +274,8 @@ impl Segment {
         return Ok(maybe_value);
     }
 
-    pub fn search_from_start(&self, key: &str) -> Result<Option<String>> {
+    pub fn search_from_start(&mut self, key: &str) -> Result<Option<String>> {
         return self.search_from(key, 0);
-    }
-
-    pub(crate) fn tell(&self) -> Result<u64> {
-        let offset = RefCell::new(&self.fd)
-            .borrow_mut()
-            .seek(SeekFrom::Current(0))?;
-        Ok(offset)
-    }
-
-    fn reset(&self) -> Result<()> {
-        self.seek(0)?;
-        Ok(())
     }
 
     pub fn read(&self) -> impl Iterator<Item=KVPair> + '_ {
@@ -317,7 +287,7 @@ impl Segment {
     }
 
 
-    pub fn read_from_start(&self) -> Result<impl Iterator<Item=KVPair> + '_> {
+    pub fn read_from_start(&mut self) -> Result<impl Iterator<Item=KVPair> + '_> {
         self.reset()?;
         return Ok(self.read());
     }
@@ -326,7 +296,7 @@ impl Segment {
 #[cfg(test)]
 mod tests {
     use crate::sst::{merge, Segment};
-    use crate::kv::KVPair;
+    use crate::kv::{KVPair, KVFileIterator};
 
     extern crate tempfile;
 
@@ -336,17 +306,6 @@ mod tests {
         sst.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
         sst.write(KVPair { key: "k2".to_owned(), value: "v2".to_owned() })?;
         assert_eq!(Some("v2".to_owned()), sst.search_from_start("k2")?);
-        Ok(())
-    }
-
-    #[test]
-    fn test_peek() -> Result<(), Box<dyn std::error::Error>> {
-        let mut sst = Segment::with_file(tempfile::tempfile()?);
-        sst.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
-        sst.reset()?;
-        let x = sst.peek()?;
-        let y = sst.peek()?;
-        assert_eq!(x, y);
         Ok(())
     }
 
@@ -434,7 +393,7 @@ mod tests {
         let v = vec![sst_1, sst_2];
         let mut merged = merge(v, 20, |index, offset, _| {})?;
         assert_eq!(merged.len(), 1);
-        let segment = merged.pop().unwrap();
+        let mut segment = merged.pop().unwrap();
         let pairs: Vec<_> = segment
             .read_from_start()?
             .map(|kv| (kv.key, kv.value))
@@ -459,7 +418,7 @@ mod tests {
         sst_1.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
         sst_2.write(KVPair { key: "k1".to_owned(), value: "v2".to_owned() })?;
         let v = vec![sst_1, sst_2];
-        let merged = merge(v, 100, |index, offset, _| {})?;
+        let mut merged = merge(v, 100, |index, offset, _| {})?;
         let expected = vec![("k1".to_owned(), "v2".to_owned())];
         let actual: Vec<_> = merged[0].read_from_start()?.map(|kv| (kv.key, kv.value)).collect();
         assert_eq!(expected, actual);
