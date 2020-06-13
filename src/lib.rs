@@ -1,4 +1,4 @@
-    //!
+//!
 //! A rust implementation of a key-value store using [Log Structured Merge Trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree#:~:text=In%20computer%20science%2C%20the%20log,%2C%20maintain%20key%2Dvalue%20pairs.)
 //!
 
@@ -26,7 +26,7 @@
 //! ```
 //! ## Design
 //!
-//! This is an embedded  key-value store that uses LSM-trees and leverages a [Write-Ahead log](https://en.wikipedia.org/wiki/Write-ahead_logging) (WAL) file for
+//! `lsm_engine` is an embedded key-value store that uses LSM-trees and leverages a [Write-Ahead log](https://en.wikipedia.org/wiki/Write-ahead_logging) (WAL) file for
 //! data recovery.
 //!
 //! The basic architecture is illustrated below:
@@ -45,7 +45,7 @@
 //! * It then linearly scans forward from that offset, looking for the desired key-value entry.
 //!
 //! ### Delete
-//! This is just a special case of write, with value being a special tombstone key.
+//! This is just a special case of write, with value being a special tombstone string.
 
 use crate::memtable::{Memtable};
 use crate::sst::{Segment};
