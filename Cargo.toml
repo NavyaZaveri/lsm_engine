@@ -3,8 +3,8 @@ name = "lsm_engine"
 version = "0.1.0"
 authors = ["NavyaZaveri <navyajayesh+1@gmail.com>"]
 description = "A rust implementation of a key-value using LSM trees"
-keywords = ["algorithms", "database", "lsm-trees", "key-value store"]
-categories =[ "algorithms", "database", "lsm-trees", "key-value-store"]
+keywords = ["algorithms", "database", "lsm-trees", "key-value-engine"]
+categories =[ "algorithms", "database", "lsm-trees", "key-value-engine"]
 
 edition = "2018"
 
