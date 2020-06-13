@@ -12,4 +12,4 @@ lsm_engine = "*"
 ```
 
 ### Docs 
-https://crates.io/crates/lsm_engine
+https://docs.rs/lfu/0.2.3/lfu/
