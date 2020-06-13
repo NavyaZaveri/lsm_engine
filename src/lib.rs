@@ -11,8 +11,8 @@
  //!         segment_size(2).
  //!         inmemory_capacity(1).
  //!         sparse_offset(2).
- //!
  //!         build();
+ //!
 //!     lsm.write("k1".to_owned(), "v1".to_owned())?;
 //!     lsm.write("k2".to_owned(), "k2".to_owned())?;
 //!     lsm.write("k1".to_owned(), "v_1_1".to_owned())?;
