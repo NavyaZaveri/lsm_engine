@@ -8,7 +8,7 @@ and leverages a [Write-Ahead log](https://en.wikipedia.org/wiki/Write-ahead_logg
 
 ```
 [dependencies]
-lsm_engine = "0.10"
+lsm_engine = "*"
 ```
 
 ### Docs 
