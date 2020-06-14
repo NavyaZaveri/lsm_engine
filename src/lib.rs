@@ -4,22 +4,28 @@
 //! ## Example Usage
 //!  ```
 //! use lsm_engine::{LSMEngine, LSMBuilder} ;
+//!
+//!
 //! fn main() -> Result<(), Box< dyn std::error::Error>> {
 //!
 //!    let mut lsm = LSMBuilder::new().
-//!          persist_data(false). // don't create a "write-ahead log"
+//!
  //!         segment_size(2000). // each sst file will have up to 2000 entries
  //!         inmemory_capacity(100). //store only 100 entries in memory
  //!         sparse_offset(20). //store one out of every 20 entries written into segments in memory
+ //!         wal_path("my_write_ahead_log.txt"). //path
  //!         build();
  //!
  //!    let default_lsm = LSMBuilder::new().build(); //an lsm engine with default parameters
  //!
-//!     lsm.write("k1".to_owned(), "v1".to_owned())?;
-//!     lsm.write("k2".to_owned(), "k2".to_owned())?;
-//!     lsm.write("k1".to_owned(), "v_1_1".to_owned())?;
-//!     let value = lsm.read("k1")?;
-//!     assert_eq!(value, Some("v_1_1".to_owned()));
+ //!    let dataset = vec![("k1", "v1"), ("k2", "v2"), ("k1", "v_1_1")];
+ //!    for (k, v) in dataset {
+ //!         lsm.write(String::from(k), String::from(v));
+ //!     }
+ //!
+ //!     assert_eq!(lsm.read("k1")?, Some("v_1_1".to_owned()));
+ //!
+//!
 //!     Ok(())
 //! }
 //! ```
@@ -176,7 +182,7 @@ impl LSMEngine {
     }
 
 
-    fn recover_from(&mut self, wal_file: File) -> Result<()> {
+    pub fn recover_from(&mut self, wal_file: File) -> Result<()> {
         self.clear();
         let mut wal_file = Wal::new(wal_file);
 
@@ -188,7 +194,7 @@ impl LSMEngine {
         Ok(())
     }
 
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.segments.clear();
         self.sparse_memory_index.clear();
     }
@@ -233,7 +239,7 @@ impl LSMEngine {
 
     ///Unfortunately this is marked as mutable since relies on rust's seek api, which is also
     /// mutable. In the future, this might change to immutable if the seek api changes
-    /// or it the issue becomes significant enough to warrant  using `Rc<RefCell<>>`
+    /// or if the issue becomes significant enough to warrant  using `Rc<RefCell<>>`
     pub fn read(&mut self, key: &str) -> Result<Option<String>> {
         if let Some(value) = self.memtable.get(key) {
             if value == &*TOMBSTONE_VALUE {
