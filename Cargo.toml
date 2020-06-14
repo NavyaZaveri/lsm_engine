@@ -1,6 +1,6 @@
 [package]
 name = "lsm_engine"
-version = "0.1.8"
+version = "0.1.9"
 authors = ["NavyaZaveri"]
 description = "A rust implementation of a key-value store using LSM trees"
 keywords = ["algorithms", "database", "lsm-trees", "key-value-engine"]
