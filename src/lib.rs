@@ -1,29 +1,41 @@
-//! A rust implementation of a key-value store using [Log Structured Merge Trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree#:~:text=In%20computer%20science%2C%20the%20log,%2C%20maintain%20key%2Dvalue%20pairs.)
-//!
-//!
-//! ## Example Usage
-//!  ```
-//! use lsm_engine::{LSMEngine, LSMBuilder} ;
-//!
-//!
-//! fn main() -> Result<(), Box< dyn std::error::Error>> {
-//!
-//!    let mut lsm = LSMBuilder::new().
-//!
+ //! A rust implementation of a key-value store using [Log Structured Merge Trees](https://en.wikipedia.org/wiki/Log-structured_merge-tree#:~:text=In%20computer%20science%2C%20the%20log,%2C%20maintain%20key%2Dvalue%20pairs.)
+ //!
+ //!
+ //! ## Example Usage
+ //!  ```
+ //! use lsm_engine::{LSMEngine, LSMBuilder} ;
+ //! use std::fs::File;
+ //!
+ //!
+ //! fn main() -> Result<(), Box< dyn std::error::Error>> {
+ //!
+ //!    let mut lsm = LSMBuilder::new().
  //!         segment_size(2000). // each sst file will have up to 2000 entries
  //!         inmemory_capacity(100). //store only 100 entries in memory
  //!         sparse_offset(20). //store one out of every 20 entries written into segments in memory
  //!         wal_path("my_write_ahead_log.txt"). //path
  //!         build();
  //!
- //!    let default_lsm = LSMBuilder::new().build(); //an lsm engine with default parameters
+ //!    let mut default_lsm = LSMBuilder::new().build(); //an lsm engine with default parameters
  //!
  //!    let dataset = vec![("k1", "v1"), ("k2", "v2"), ("k1", "v_1_1")];
- //!    for (k, v) in dataset {
- //!         lsm.write(String::from(k), String::from(v));
+ //!
+ //!    for (k, v) in dataset.iter() {
+ //!         lsm.write(String::from(*k), String::from(*v));
+ //!     }
+ //!     assert_eq!(lsm.read("k1")?, Some("v_1_1".to_owned()));
+ //!
+ //!
+ //!     let mut wal  = File::open("my_write_ahead_log.txt")?;
+ //!     default_lsm.recover_from(wal)?;
+ //!     for (k, v) in dataset {
+ //!         assert!(default_lsm.contains(k)?);
  //!     }
  //!
- //!     assert_eq!(lsm.read("k1")?, Some("v_1_1".to_owned()));
+ //!     //cleanup
+ //!    std::fs::remove_file("my_write_ahead_log.txt")?;
+ //!
+ //!
  //!
 //!
 //!     Ok(())
@@ -280,7 +292,7 @@ impl LSMEngine {
         Ok(())
     }
 
-    fn contains(&mut self, key: &str) -> Result<bool> {
+    pub fn contains(&mut self, key: &str) -> Result<bool> {
 
 //TODO: use a scalable bloom filter for faster lookups
         let maybe_value = self.read(key)?;
