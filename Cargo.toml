@@ -1,6 +1,6 @@
 [package]
 name = "lsm_engine"
-version = "0.1.9"
+version = "0.2.0"
 authors = ["NavyaZaveri"]
 description = "A rust implementation of a key-value store using LSM trees"
 keywords = ["algorithms", "database", "lsm-trees", "key-value-engine"]
@@ -20,8 +20,6 @@ lazy_static = "1.4.0"
 thiserror = "1.0"
 binary-heap-plus = "0.2.0"
 rand = "0.7.3"
-bloom = "0.2.0"
-
 
 
 
