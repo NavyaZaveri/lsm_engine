@@ -309,7 +309,7 @@ impl LSMEngine {
     }
 
     pub fn contains(&mut self, key: &str) -> Result<bool> {
-        if !self.bloom_filter.contains(&key.to_string()) {
+        if !self.bloom_filter.contains(&key) {
             return Ok(false);
         }
         let maybe_value = self.read(key)?;
