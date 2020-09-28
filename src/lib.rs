@@ -218,6 +218,7 @@ impl LSMEngine {
     pub fn clear(&mut self) {
         self.segments.clear();
         self.sparse_memory_index.clear();
+        self.bloom_filter.clear();
     }
 
 
