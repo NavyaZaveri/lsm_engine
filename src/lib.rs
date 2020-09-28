@@ -79,7 +79,11 @@ use std::fs::{File, OpenOptions};
 use std::path::Path;
 use rand::{SeedableRng};
 
+extern crate bloom;
+
+
 use rand::rngs::StdRng;
+use bloom::BloomFilter;
 
 
 #[macro_use]
@@ -120,7 +124,7 @@ pub struct LSMEngine {
     sparse_memory_index: BTreeMap<String, (KeyOffset, SegmentIndex)>,
     sparse_offset: usize,
     wal: Option<Wal>,
-
+    bloom_filter: BloomFilter,
 }
 
 
@@ -190,6 +194,11 @@ impl LSMEngine {
             segment_size,
             sparse_offset,
             wal,
+
+            // we don't care about high false positivity rate (0.9) since we're only using the bloom filter
+            // to detect keys _not_ inserted into the db (ie, false negatives)
+            bloom_filter: BloomFilter::with_rate(0.9, 10000),
+
         }
     }
 
@@ -209,6 +218,7 @@ impl LSMEngine {
     pub fn clear(&mut self) {
         self.segments.clear();
         self.sparse_memory_index.clear();
+        self.bloom_filter.clear();
     }
 
 
@@ -235,16 +245,22 @@ impl LSMEngine {
     }
 
     pub fn write(&mut self, key: String, value: String) -> Result<()> {
-        if self.wal.is_some() {
-            self.wal.as_mut().unwrap().persist(KVPair { key: key.clone(), value: value.clone() })?;
-        }
-        if self.memtable.at_capacity() & &!self.memtable.contains(&key) {
+        self.write_to_wal(&key, &value)?;
+        self.bloom_filter.insert(&key);
+        if self.memtable.at_capacity() && !self.memtable.contains(&key) {
             let new_segment = self.flush_memtable()?;
             self.segments.push(new_segment);
             self.memtable.insert(key, value);
             self.merge_segments()?;
         } else {
             self.memtable.insert(key, value);
+        }
+        Ok(())
+    }
+
+    pub fn write_to_wal(&mut self, key: &String, value: &String) -> Result<()> {
+        if self.wal.is_some() {
+            self.wal.as_mut().unwrap().persist(KVPair { key: key.clone(), value: value.clone() })?;
         }
         Ok(())
     }
@@ -293,8 +309,9 @@ impl LSMEngine {
     }
 
     pub fn contains(&mut self, key: &str) -> Result<bool> {
-
-//TODO: use a scalable bloom filter for faster lookups
+        if !self.bloom_filter.contains(&key) {
+            return Ok(false);
+        }
         let maybe_value = self.read(key)?;
         return Ok(maybe_value.is_some());
     }
@@ -425,6 +442,7 @@ mod tests {
         std::fs::remove_file("foo")?;
         Ok(())
     }
+
 
     #[test]
     fn test_contains() -> std::result::Result<(), Box<dyn std::error::Error>> {
