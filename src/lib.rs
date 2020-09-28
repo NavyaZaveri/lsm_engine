@@ -194,7 +194,11 @@ impl LSMEngine {
             segment_size,
             sparse_offset,
             wal,
+
+            // we don't care about high false positivity rate (0.9) since we're only using the bloom filter
+            // to detect keys _not_ inserted into the db (ie, false negatives)
             bloom_filter: BloomFilter::with_rate(0.9, 10000),
+
         }
     }
 
