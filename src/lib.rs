@@ -326,7 +326,6 @@ impl Default for LSMEngine {
 #[cfg(test)]
 mod tests {
     use crate::{LSMEngine, LSMBuilder};
-    use crate::{TOMBSTONE_VALUE};
     use rand::seq::SliceRandom;
     use rand::{SeedableRng};
 
@@ -422,7 +421,6 @@ mod tests {
             lsm.write(key.to_string(), v.to_string())?;
         }
 
-
         for i in 10..dataset.len() {
             let (k, v) = &dataset[i];
             lsm.delete(k)?;
@@ -439,6 +437,7 @@ mod tests {
             let (k, v) = &dataset[i];
             assert_eq!(new_lsm.read(k)?, None);
         }
+
         std::fs::remove_file("foo")?;
         Ok(())
     }

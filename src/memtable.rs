@@ -12,7 +12,7 @@ impl<K: PartialOrd + Hash + Ord, T> Memtable<K, T> {
     pub fn new(capacity: usize) -> Self {
         Memtable {
             kv_table: BTreeMap::new(),
-            capacity: capacity,
+            capacity,
         }
     }
 
