@@ -216,7 +216,6 @@ impl LSMEngine {
     pub fn recover_from(&mut self, wal_file: File) -> Result<()> {
         self.clear();
         let mut wal_file = Wal::new(wal_file);
-
         for maybe_kv in wal_file.read_from_start()? {
             let kv = maybe_kv?;
             self.write(kv.key, kv.value)?;
@@ -257,6 +256,7 @@ impl LSMEngine {
                 }
                 count += 1;
             });
+
             *segments.lock().unwrap() = result_segments.unwrap();
             *state.lock().unwrap() = State::Free;
         });
@@ -325,9 +325,6 @@ impl LSMEngine {
                 return Ok(None);
             }
         }
-
-        dbg!("reutnring none");
-
         Ok(None)
     }
     pub fn delete(&mut self, key: &str) -> Result<()> {
