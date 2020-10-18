@@ -84,6 +84,8 @@ extern crate bloom;
 
 use rand::rngs::StdRng;
 use bloom::BloomFilter;
+use std::thread;
+use std::sync::{Arc, Mutex};
 
 
 #[macro_use]
@@ -117,14 +119,22 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, self::Error>;
 
+
+#[derive(PartialEq, Copy, Clone)]
+enum State {
+    Busy,
+    Free,
+}
+
 pub struct LSMEngine {
     memtable: Memtable<String, String>,
     segments: Vec<Segment>,
     segment_size: usize,
-    sparse_memory_index: BTreeMap<String, (KeyOffset, SegmentIndex)>,
+    sparse_memory_index: Arc<Mutex<BTreeMap<String, (KeyOffset, SegmentIndex)>>>,
     sparse_offset: usize,
     wal: Option<Wal>,
     bloom_filter: BloomFilter,
+    state: Arc<Mutex<State>>,
 }
 
 
@@ -190,7 +200,7 @@ impl LSMEngine {
         LSMEngine {
             memtable: Memtable::new(inmemory_capacity),
             segments: Vec::new(),
-            sparse_memory_index: BTreeMap::new(),
+            sparse_memory_index: Arc::new(Mutex::new(BTreeMap::new())),
             segment_size,
             sparse_offset,
             wal,
@@ -198,7 +208,7 @@ impl LSMEngine {
             // we don't care about high false positivity rate (0.9) since we're only using the bloom filter
             // to detect keys _not_ inserted into the db (ie, false negatives)
             bloom_filter: BloomFilter::with_rate(0.9, 10000),
-
+            state: Arc::new(Mutex::new(State::Free)),
         }
     }
 
@@ -217,7 +227,7 @@ impl LSMEngine {
 
     pub fn clear(&mut self) {
         self.segments.clear();
-        self.sparse_memory_index.clear();
+        self.sparse_memory_index.lock().unwrap().clear();
         self.bloom_filter.clear();
     }
 
@@ -232,19 +242,32 @@ impl LSMEngine {
 
 
     fn merge_segments(&mut self) -> Result<()> {
-        self.sparse_memory_index.clear();
-        let mut count = 0;
-        self.segments = sst::merge(std::mem::take(&mut self.segments), self.segment_size,
-                                   |segment_index, key_offset, key| {
-                                       if count % self.sparse_offset == 0 {
-                                           self.sparse_memory_index.insert(key, (key_offset, segment_index));
-                                       }
-                                       count += 1;
-                                   })?;
+        let spm_clone = self.sparse_memory_index.clone();
+        let segments = Arc::new(Mutex::new(std::mem::take(&mut self.segments)));
+        let segment_size = self.segment_size;
+        let sparse_offset = self.sparse_offset;
+        *self.state.lock().unwrap() = State::Busy;
+        let state = self.state.clone();
+        thread::spawn(move || {
+            spm_clone.lock().unwrap().clear();
+            let mut count = 0;
+            sst::merge(segments, segment_size, |segment_index, key_offset, key| {
+                if count % sparse_offset == 0 {
+                    spm_clone.lock().unwrap().insert(key, (key_offset, segment_index));
+                }
+                count += 1;
+            });
+            *state.lock().unwrap() = State::Free;
+        });
+
         Ok(())
     }
 
     pub fn write(&mut self, key: String, value: String) -> Result<()> {
+        let current_state = *self.state.lock().unwrap();
+        while current_state == State::Busy {
+            continue;
+        }
         self.write_to_wal(&key, &value)?;
         self.bloom_filter.insert(&key);
         if self.memtable.at_capacity() && !self.memtable.contains(&key) {
@@ -265,10 +288,15 @@ impl LSMEngine {
         Ok(())
     }
 
+
     ///Unfortunately this is marked as mutable since relies on rust's seek api, which is also
     /// mutable. In the future, this might change to immutable if the seek api changes
     /// or if the issue becomes significant enough to warrant  using `Rc<RefCell<>>`
     pub fn read(&mut self, key: &str) -> Result<Option<String>> {
+        let current_state = &*self.state.lock().unwrap();
+        while current_state == &State::Busy {
+            continue;
+        }
         if let Some(value) = self.memtable.get(key) {
             if value == &*TOMBSTONE_VALUE {
                 return Ok(None);
@@ -278,7 +306,8 @@ impl LSMEngine {
 
 
         //get the biggest element less than or equal to the key
-        let mut before = self.sparse_memory_index.range((Unbounded, Included(key.to_owned())));
+        let spm = self.sparse_memory_index.lock().unwrap();
+        let mut before = spm.range((Unbounded, Included(key.to_owned())));
         let maybe_closest_key = before.next_back();
 
         if maybe_closest_key.is_none() {
