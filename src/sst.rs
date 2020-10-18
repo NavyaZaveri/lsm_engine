@@ -73,7 +73,7 @@ impl PartialEq for MetaKey {
 }
 
 impl PartialOrd for MetaKey {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
         return Some(self.cmp(self));
     }
 }
@@ -147,7 +147,7 @@ impl<I: Iterator<Item=KVPair>> Iterator for SstMerger<I> {
 }
 
 pub fn merge<F: FnMut(usize, u64, String) -> ()>(
-    mut segments: Arc<Mutex<Vec<Segment>>>,
+    segments: Arc<Mutex<Vec<Segment>>>,
     segment_size: usize,
     mut callback_on_write: F,
 ) -> Result<Vec<Segment>> {
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn test_search_range() -> Result<(), Box<dyn std::error::Error>> {
         let mut sst = Segment::with_file(tempfile::tempfile()?);
-        let offset_1 = sst.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
+        let _offset_1 = sst.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
         let offset_2 = sst.write(KVPair { key: "k2".to_owned(), value: "v2".to_owned() })?;
         sst.write(KVPair { key: "k3".to_owned(), value: "v3".to_owned() })?;
 
@@ -388,7 +388,7 @@ mod tests {
         let mut sst_2 = Segment::temp();
         sst_2.write(KVPair { key: "k2".to_owned(), value: "v2".to_owned() })?;
         let v = vec![sst_1, sst_2];
-        let mut merged = merge(Arc::new(Mutex::new(v)), 20, |index, offset, _| {})?;
+        let mut merged = merge(Arc::new(Mutex::new(v)), 20, |_index, _offset, _| {})?;
         assert_eq!(merged.len(), 1);
         let mut segment = merged.pop().unwrap();
         let pairs: Vec<_> = segment
@@ -415,7 +415,7 @@ mod tests {
         sst_1.write(KVPair { key: "k1".to_owned(), value: "v1".to_owned() })?;
         sst_2.write(KVPair { key: "k1".to_owned(), value: "v2".to_owned() })?;
         let v = vec![sst_1, sst_2];
-        let mut merged = merge(Arc::new(Mutex::new(v)), 100, |index, offset, _| {})?;
+        let mut merged = merge(Arc::new(Mutex::new(v)), 100, |_index, _offset, _| {})?;
         let expected = vec![("k1".to_owned(), "v2".to_owned())];
         let actual: Vec<_> = merged[0].read_from_start()?.map(|kv| (kv.key, kv.value)).collect();
         assert_eq!(expected, actual);

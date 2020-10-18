@@ -313,7 +313,7 @@ impl LSMEngine {
             return Ok(None);
         }
 
-        let (closest_key, (key_offset, segment_index)) = maybe_closest_key.unwrap();
+        let (_closest_key, (key_offset, segment_index)) = maybe_closest_key.unwrap();
         let mut segs = self.segments.lock().unwrap();
         for index in *segment_index..segs.len() {
             let segment = &mut segs[index];
@@ -427,7 +427,7 @@ mod tests {
             lsm.write(k.clone(), v.clone())?;
             seen.insert(k, v.clone());
 
-            let (random_key, random_value) = dataset.choose(&mut rng).unwrap();
+            let (random_key, _random_value) = dataset.choose(&mut rng).unwrap();
             let mut value = None;
 
             if seen.contains_key(random_key) {
@@ -449,7 +449,7 @@ mod tests {
         }
 
         for i in 10..dataset.len() {
-            let (k, v) = &dataset[i];
+            let (k, _v) = &dataset[i];
             lsm.delete(k)?;
         }
 
@@ -461,7 +461,7 @@ mod tests {
         }
 
         for i in 10..dataset.len() {
-            let (k, v) = &dataset[i];
+            let (k, _v) = &dataset[i];
             assert_eq!(new_lsm.read(k)?, None);
         }
 
