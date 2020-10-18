@@ -128,7 +128,7 @@ enum State {
 
 pub struct LSMEngine {
     memtable: Memtable<String, String>,
-    segments: Vec<Segment>,
+    segments: Arc<Mutex<Vec<Segment>>>,
     segment_size: usize,
     sparse_memory_index: Arc<Mutex<BTreeMap<String, (KeyOffset, SegmentIndex)>>>,
     sparse_offset: usize,
@@ -199,7 +199,7 @@ impl LSMEngine {
 
         LSMEngine {
             memtable: Memtable::new(inmemory_capacity),
-            segments: Vec::new(),
+            segments: Arc::new(Mutex::new(Vec::new())),
             sparse_memory_index: Arc::new(Mutex::new(BTreeMap::new())),
             segment_size,
             sparse_offset,
@@ -226,7 +226,7 @@ impl LSMEngine {
     }
 
     pub fn clear(&mut self) {
-        self.segments.clear();
+        self.segments.lock().unwrap().clear();
         self.sparse_memory_index.lock().unwrap().clear();
         self.bloom_filter.clear();
     }
@@ -243,20 +243,21 @@ impl LSMEngine {
 
     fn merge_segments(&mut self) -> Result<()> {
         let spm_clone = self.sparse_memory_index.clone();
-        let segments = Arc::new(Mutex::new(std::mem::take(&mut self.segments)));
+        let segments = self.segments.clone();
         let segment_size = self.segment_size;
         let sparse_offset = self.sparse_offset;
         *self.state.lock().unwrap() = State::Busy;
         let state = self.state.clone();
+        spm_clone.lock().unwrap().clear();
         thread::spawn(move || {
-            spm_clone.lock().unwrap().clear();
             let mut count = 0;
-            sst::merge(segments, segment_size, |segment_index, key_offset, key| {
+            let result_segments = sst::merge(segments.clone(), segment_size, |segment_index, key_offset, key| {
                 if count % sparse_offset == 0 {
                     spm_clone.lock().unwrap().insert(key, (key_offset, segment_index));
                 }
                 count += 1;
             });
+            *segments.lock().unwrap() = result_segments.unwrap();
             *state.lock().unwrap() = State::Free;
         });
 
@@ -264,15 +265,14 @@ impl LSMEngine {
     }
 
     pub fn write(&mut self, key: String, value: String) -> Result<()> {
-        let current_state = *self.state.lock().unwrap();
-        while current_state == State::Busy {
+        while *self.state.lock().unwrap() == State::Busy {
             continue;
         }
         self.write_to_wal(&key, &value)?;
         self.bloom_filter.insert(&key);
         if self.memtable.at_capacity() && !self.memtable.contains(&key) {
             let new_segment = self.flush_memtable()?;
-            self.segments.push(new_segment);
+            self.segments.lock().unwrap().push(new_segment);
             self.memtable.insert(key, value);
             self.merge_segments()?;
         } else {
@@ -293,8 +293,7 @@ impl LSMEngine {
     /// mutable. In the future, this might change to immutable if the seek api changes
     /// or if the issue becomes significant enough to warrant  using `Rc<RefCell<>>`
     pub fn read(&mut self, key: &str) -> Result<Option<String>> {
-        let current_state = &*self.state.lock().unwrap();
-        while current_state == &State::Busy {
+        while *self.state.lock().unwrap() == State::Busy {
             continue;
         }
         if let Some(value) = self.memtable.get(key) {
@@ -315,9 +314,9 @@ impl LSMEngine {
         }
 
         let (closest_key, (key_offset, segment_index)) = maybe_closest_key.unwrap();
-
-        for index in *segment_index..self.segments.len() {
-            let segment = &mut self.segments[index];
+        let mut segs = self.segments.lock().unwrap();
+        for index in *segment_index..segs.len() {
+            let segment = &mut segs[index];
             let maybe_value = if index == *segment_index { segment.search_from(key, *key_offset)? } else { segment.search_from_start(key)? };
             if maybe_value.is_some() {
                 if maybe_value.as_ref().map(|x| x != &*TOMBSTONE_VALUE).unwrap() { return Ok(maybe_value); };
@@ -326,6 +325,8 @@ impl LSMEngine {
                 return Ok(None);
             }
         }
+
+        dbg!("reutnring none");
 
         Ok(None)
     }

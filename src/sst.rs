@@ -16,7 +16,6 @@ use std::iter::Peekable;
 use crate::kv::{KVPair, KVFileIterator, KVFileWriter};
 use std::convert::TryFrom;
 use std::sync::{Arc, Mutex};
-use std::borrow::BorrowMut;
 
 
 type Result<T> = std::result::Result<T, SstError>;
@@ -260,6 +259,7 @@ impl Segment {
     pub fn search_from(&mut self, key: &str, offset: u64) -> Result<Option<String>> {
         let current_pos = self.tell()?;
         self.seek(offset)?;
+        dbg!("searchinggg");
         let maybe_value = self
             .read()
             .find(|x| x.key.as_str() >= key)
