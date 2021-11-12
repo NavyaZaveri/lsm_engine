@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 #[macro_use]
 use thiserror::Error;
 use std::fs::File;
-use serde::export::TryFrom;
+use std::convert::TryFrom;
 use std::io::{SeekFrom, Seek, BufReader, BufRead, Write};
 
 
